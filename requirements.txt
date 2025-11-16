@@ -1,13 +1,8 @@
-<<<<<<< HEAD
-=======
-# ---------- core ----------
->>>>>>> c64597fc60e699182f13c949493bb47412d0a81e
 fastapi==0.115.4
 uvicorn[standard]==0.32.0
 pydantic==2.10.2
 python-dotenv==1.0.0
 websockets==12.0
-<<<<<<< HEAD
 python-multipart==0.0.6
 httpx==0.27.2
 pipecat-ai[daily]==0.0.52
@@ -17,16 +12,3 @@ aiofiles==23.2.1
 kokoro-onnx==0.2.1
 torch==2.1.2
 faster-whisper==1.0.3
-=======
-
-# ---------- http ----------
-httpx==0.27.2
-
-# ---------- ai ----------
-google-generativeai==0.8.3
-
-# ---------- audio ----------
-soundfile==0.12.1
-aiofiles==23.2.1
-python-multipart==0.0.6
->>>>>>> c64597fc60e699182f13c949493bb47412d0a81e
