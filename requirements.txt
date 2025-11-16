@@ -9,10 +9,9 @@ websockets==12.0
 httpx==0.27.2
 
 # ---------- ai ----------
-google-generativeai==0.8.3          # Gemini SDK (wheel)
-pipecat-ai[daily]==0.0.45           # Daily.co bot helpers (wheel)
+google-generativeai==0.8.3
 
 # ---------- audio ----------
-soundfile==0.12.1                   #读写 WAV
-aiofiles==23.2.1                    # 异步文件
-python-multipart==0.0.6             # FastAPI 上传
+soundfile==0.12.1
+aiofiles==23.2.1
+python-multipart==0.0.6
