@@ -14,8 +14,7 @@ downloads/
 eggs/
 .eggs/
 lib/
-lib64/
-parts/
+lib64/parts/
 sdist/
 var/
 wheels/
@@ -66,3 +65,8 @@ dmypy.json
 
 # Environment directories
 .python-version
+
+# --- Custom Additions for Models/Large Files ---
+# Ignore the entire models folder to prevent accidental commitment of large model files
+models/*.onnx
+models/*
