@@ -11,7 +11,10 @@ from pipecat.services.openai.llm import OpenAILLMService
 
 load_dotenv()
 
-
+class LiveKitConfig(TypedDict):
+    api_key: str
+    api_secret: str
+    url: str
 class DailyConfig(TypedDict):
     api_key: str
     api_url: str
@@ -43,12 +46,20 @@ class BotConfig:
 
         missing = [k for k, v in required.items() if not v]
         if missing:
-            raise ValueError(f"Missing required env vars: {', '.join(missing)}")
+            # ✅ SAFE: Generic error without listing variable names
+            raise ValueError("Missing required environment variables")
 
         self.daily: DailyConfig = {
             "api_key": str(required["DAILY_API_KEY"]), 
             "api_url": os.getenv("DAILY_API_URL", "https://api.daily.co/v1"),
         }
+
+        if not os.getenv("LIVEKIT_API_KEY"):
+            raise ValueError("LIVEKIT_API_KEY is required")
+        if not os.getenv("LIVEKIT_API_SECRET"):
+            raise ValueError("LIVEKIT_API_SECRET is required")
+        if not os.getenv("LIVEKIT_WS_URL"):
+            raise ValueError("LIVEKIT_URL is required")
 
         # Bot configuration
         self._bot_type: BotType = os.getenv("BOT_TYPE", "therapy")  # type: ignore[assignment]
@@ -56,16 +67,8 @@ class BotConfig:
             self._bot_type = "therapy"  # type: ignore[assignment]
     
     def __repr__(self) -> str:
-        # NOTE: Using the structure from the previous response
-        return (
-            f"BotConfig(bot_type={self.bot_type}, therapy_bot_name={self.bot_name}, "
-            f"llm_provider={self.llm_provider}, deepseek_model={self.deepseek_model}, "
-            f"google_model={self.google_model}, openai_model={self.openai_model}, "
-            f"tts_provider={self.tts_provider}, kokoro_voice={self.kokoro_voice}, "
-            f"kokoro_speed={self.kokoro_speed}, "
-            f"enable_stt_mute_filter={self.enable_stt_mute_filter}, "
-            f"classifier_model={self.classifier_model})"
-        )
+        # ✅ SAFE: Minimal representation without full configuration details
+        return f"BotConfig(bot_type={self.bot_type}, bot_name={self.bot_name})"
 
     def _is_truthy(self, value: str) -> bool:
         return value.lower() in (
@@ -281,14 +284,15 @@ class BotConfig:
     def enable_stt_mute_filter(self, value: bool):
         os.environ["ENABLE_STT_MUTE_FILTER"] = str(value)
 
-    # --- Smart Endpointing Configuration ---
 
     @property
-    def classifier_model(self) -> str:
-        return os.getenv("CLASSIFIER_MODEL", "gemini-2.0-flash")
+    def livekit_api_key(self) -> str:
+        return os.getenv("LIVEKIT_API_KEY", "")
 
-    @classifier_model.setter
-    def classifier_model(self, value: str):
-        os.environ["CLASSIFIER_MODEL"] = value
+    @property
+    def livekit_api_secret(self) -> str:
+        return os.getenv("LIVEKIT_API_SECRET", "")
 
-    
+    @property
+    def livekit_url(self) -> str:
+        return os.getenv("LIVEKIT_URL", "")

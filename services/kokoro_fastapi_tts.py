@@ -44,7 +44,8 @@ class KokoroFastAPIService(TTSService):
     async def run_tts(self, text: str) -> AsyncGenerator[Frame, None]:
         """Generate speech by calling the FastAPI service."""
         
-        logger.debug(f"Generating TTS via FastAPI: [{text[:50]}...]")
+        # ✅ SAFE: Log that TTS is being generated, not what the content is
+        logger.debug(f"Generating TTS via FastAPI (text length: {len(text)})")
         
         try:
             if not self._session or self._session.closed:
@@ -66,17 +67,19 @@ class KokoroFastAPIService(TTSService):
                 
                 if response.status != 200:
                     error_text = await response.text()
-                    logger.error(f"Kokoro FastAPI error: {response.status} - {error_text}")
+                    # ✅ SAFE: Log status and error type, not full error text which might contain content
+                    logger.error(f"Kokoro FastAPI error: HTTP {response.status}")
+                    logger.debug(f"Kokoro FastAPI error details: {error_text[:100] if error_text else 'No error text'}")
                     yield ErrorFrame(error=f"TTS API error: {response.status}")
                     return
                 
                 # Get binary audio data
                 audio_bytes = await response.read()
-                logger.debug(f"Received {len(audio_bytes)} bytes of audio")
+                logger.debug(f"Received audio response: {len(audio_bytes)} bytes")
                 
                 # Check content type
                 content_type = response.headers.get('Content-Type', '')
-                logger.debug(f"Content-Type: {content_type}")
+                logger.debug(f"Audio content type: {content_type}")
                 
                 # Parse audio based on format
                 if 'audio/mpeg' in content_type or 'audio/mp3' in content_type or audio_bytes.startswith(b'ID3'):
@@ -90,7 +93,7 @@ class KokoroFastAPIService(TTSService):
                     audio_data = self._parse_raw_audio(audio_bytes)
                 
                 if not audio_data:
-                    logger.error("No audio data generated")
+                    logger.error("No audio data generated from TTS response")
                     yield ErrorFrame(error="Empty audio response")
                     return
                 
@@ -103,8 +106,9 @@ class KokoroFastAPIService(TTSService):
                 yield TTSStoppedFrame()
 
         except Exception as e:
-            logger.error(f"Kokoro FastAPI generation failed: {e}")
-            yield ErrorFrame(error=f"TTS generation error: {e}")
+            # ✅ SAFE: Log exception type only
+            logger.error(f"Kokoro FastAPI generation failed: {type(e).__name__}")
+            yield ErrorFrame(error=f"TTS generation error: {type(e).__name__}")
 
     def _decode_mp3(self, mp3_bytes: bytes) -> bytes:
         """Decode MP3 to raw PCM using pydub."""
@@ -121,7 +125,7 @@ class KokoroFastAPIService(TTSService):
             
             # Resample if needed
             if audio.frame_rate != self._sample_rate:
-                logger.debug(f"Resampling from {audio.frame_rate}Hz to {self._sample_rate}Hz")
+                logger.debug(f"Resampling audio from {audio.frame_rate}Hz to {self._sample_rate}Hz")
                 audio = audio.set_frame_rate(self._sample_rate)
             
             # Convert to 16-bit PCM
@@ -135,11 +139,10 @@ class KokoroFastAPIService(TTSService):
             return pcm_data
             
         except ImportError:
-            logger.error("pydub not installed. Install with: pip install pydub")
-            logger.error("Also requires ffmpeg: sudo apt install ffmpeg")
+            logger.error("pydub not installed for MP3 decoding")
             return b""
         except Exception as e:
-            logger.error(f"Failed to decode MP3: {e}")
+            logger.error(f"Failed to decode MP3: {type(e).__name__}")
             return b""
 
     def _parse_raw_audio(self, audio_bytes: bytes) -> bytes:
@@ -160,7 +163,7 @@ class KokoroFastAPIService(TTSService):
             return audio_int16.tobytes()
             
         except Exception as e:
-            logger.error(f"Failed to parse raw audio: {e}")
+            logger.error(f"Failed to parse raw audio: {type(e).__name__}")
             return b""
 
     def _parse_wav(self, audio_bytes: bytes) -> bytes:
@@ -203,7 +206,7 @@ class KokoroFastAPIService(TTSService):
                     return b""
                     
         except Exception as e:
-            logger.error(f"Failed to parse WAV: {e}")
+            logger.error(f"Failed to parse WAV: {type(e).__name__}")
             return b""
 
     async def cleanup(self):
