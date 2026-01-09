@@ -1,50 +1,29 @@
-# ============================================================================
-# ALETHEIA THERAPY BOT - Complete Requirements
-# ============================================================================
-
-# === Core Server & ASGI ===
 fastapi==0.115.8
 uvicorn[standard]==0.34.0
-aiohttp>=3.11.12,<4.0.0  
-requests>=2.31.0  # For API calls
-websockets>=12.0  # For WebSocket transport
+aiohttp>=3.9,<3.11.13
+requests==2.31.0
 
-# === Pipecat AI Framework ===
-pipecat-ai[daily,openai,silero,google]==0.0.95
-pipecat-ai-flows==0.0.18
+livekit-api>=1.0.0
 
-# === STT: Local Whisper (Fast) ===
-faster-whisper>=1.0.0  # CTranslate2 implementation
-openai-whisper>=20231117  # Fallback compatibility
-tokenizers>=0.15.0  # Required by Faster Whisper
+pipecat-ai[openai,silero,google]==0.0.95
 
-# === LLM: DeepSeek v3.2 ===
-openai>=1.74.0,<3.0.0  # OpenAI-compatible client
+faster-whisper
+tokenizers
 
-# === Classifier: Google Gemini ===
-google-generativeai>=0.8.0
-google-ai-generativelanguage>=0.6.0
+openai==1.74.0
+google-generativeai==0.8.0
 
-# === TTS: Kokoro 82M (Local) ===
-kokoro-onnx>=0.1.0
-onnxruntime>=1.20.0  # CPU version
-huggingface-hub>=0.20.0  # For model downloads
+torch
+torchaudio
 
-# === Audio Processing ===
-av>=11.0.0  # PyAV - REQUIRED by Pipecat
-torch>=2.0.0,<3.0.0  # Flexible version
-torchaudio>=2.0.0
+supabase==2.13.0
+python-jose==3.3.0
 
-# === Utilities ===
 loguru==0.7.3
 python-dotenv==1.0.1
 pytz==2025.1
-pydantic>=2.0.0
-pydantic-settings>=2.0.0
-typing-extensions>=4.9.0
-cryptography
-pydub
-
-# === Optional: Monitoring (Production) ===
-# prometheus-client>=0.20.0
-# psutil>=5.9.0
+pydantic>=2.6,<3
+pydantic-settings>=2.2,<3
+typing-extensions>=4.10
+pydub==0.25.1
+structlog==24.1.0

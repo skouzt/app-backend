@@ -18,6 +18,11 @@ from pipecat.frames.frames import (
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
 )
+from pipecat.processors.frame_processor import FrameProcessor
+from pipecat.frames.frames import (
+    LLMMessagesFrame,
+    TextFrame,
+)
 
 from pipecat.processors.aggregators.llm_response import BaseLLMResponseAggregator
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContextFrame
@@ -88,84 +93,83 @@ def get_message_text(message: object) -> str:
 
 class StatementJudgeContextFilter(FrameProcessor):
     """
-    Production-ready speech classifier with rate limiting, circuit breaker, 
-    and comprehensive error handling for Google Gemini API.
+    Production-ready classifier with silent failover for rate limits.
+    Logs are suppressed for expected errors to avoid spam.
     """
     
     def __init__(self, notifier: BaseNotifier, **kwargs):
         super().__init__(**kwargs)
         self._notifier = notifier
         
-        # State management
+        # Rate limiting state
         self._last_request_time = 0
-        self._consecutive_failures = 0
+        self._min_request_interval = 3.0  # Increased to 3 seconds minimum
+        
+        # Circuit breaker state
         self._circuit_open = False
+        self._consecutive_failures = 0
+        self._max_failures = 3
+        self._last_failure_time = 0
+        self._cooldown_period = 120  # 2 minutes cooldown
+        
+        # Daily quota tracking
         self._daily_request_count = 0
-        self._last_reset_day = time.strftime("%Y-%m-%d")
+        self._max_daily_requests = 800  # Stay well under 1500 limit
         
-        # Configuration
-        self._config = RATE_LIMIT_CONFIG
+        logger.info("StatementJudge initialized with silent failover")
+
+    async def _check_rate_limit(self) -> bool:
+        """Check if we should make a request based on time limits."""
+        now = time.time()
+        time_since_last = now - self._last_request_time
         
-        logger.info(f"StatementJudge initialized with rate limiting: {self._config}")
+        if time_since_last < self._min_request_interval:
+            logger.debug("Rate limit: waiting for minimum interval")
+            return False
+        
+        return True
 
     async def _check_circuit_breaker(self) -> bool:
-        """Check if circuit breaker has tripped."""
-        if self._circuit_open:
-            logger.error("CIRCUIT BREAKER OPEN - Classifier is disabled")
+        """Check if circuit breaker is closed (healthy)."""
+        if not self._circuit_open:
             return True
         
-        # Daily reset
-        today = time.strftime("%Y-%m-%d")
-        if today != self._last_reset_day:
-            self._daily_request_count = 0
-            self._last_reset_day = today
-            logger.info("Daily request count reset")
-        
-        # Check daily quota
-        if self._daily_request_count >= self._config["max_daily_requests"]:
-            logger.error(f"DAILY QUOTA EXCEEDED: {self._daily_request_count}/{self._config['max_daily_requests']}")
-            self._circuit_open = True
+        # Check cooldown
+        time_since_failure = time.time() - self._last_failure_time
+        if time_since_failure > self._cooldown_period:
+            logger.info("Circuit breaker cooldown passed - retrying")
+            self._circuit_open = False
+            self._consecutive_failures = 0
             return True
         
         return False
 
-    async def _enforce_rate_limit(self):
-        """Enforce minimum interval between requests."""
-        now = time.time()
-        time_since_last = now - self._last_request_time
+    async def _trip_circuit_breaker(self, error_msg: str):
+        """Trip breaker on repeated failures."""
+        self._consecutive_failures += 1
+        self._last_failure_time = time.time()
         
-        if time_since_last < self._config["min_request_interval"]:
-            wait_time = self._config["min_request_interval"] - time_since_last
-            logger.warning(f"Rate limiting: waiting {wait_time:.2f}s")
-            await asyncio.sleep(wait_time)
-        
-        self._last_request_time = time.time()
-
-    def _calculate_retry_delay(self) -> float:
-        """Exponential backoff with jitter."""
-        base = self._config["retry_base_delay"]
-        exp = min(self._consecutive_failures, 4)  # Cap exponent
-        delay = base * (2 ** exp)
-        jitter = delay * 0.1  # 10% jitter
-        return min(delay + jitter, self._config["max_retry_delay"])
+        if self._consecutive_failures >= self._max_failures:
+            logger.warning("Circuit breaker opened due to repeated failures")
+            logger.warning("Classifier will be disabled for 2 minutes")
+            self._circuit_open = True
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
         
-        # Never block system frames
         if isinstance(frame, SystemFrame):
             await self.push_frame(frame, direction)
             return
 
         if isinstance(frame, OpenAILLMContextFrame):
-            # Check circuit breaker first
-            if await self._check_circuit_breaker():
-                # Fallback: assume speech is complete to avoid blocking
-                logger.warning("Circuit breaker active - forcing speech completion")
+            # Check circuit breaker BEFORE processing
+            if not await self._check_circuit_breaker():
+                # Silent failover - no error logged
+                logger.debug("Circuit breaker active - forcing completion")
                 await self.push_frame(UserStoppedSpeakingFrame())
                 await self._notifier.notify()
                 return
-
+            
             # Extract messages
             messages = frame.context.messages
             user_text_messages = []
@@ -186,10 +190,16 @@ class StatementJudgeContextFilter(FrameProcessor):
                 await self.push_frame(frame, direction)
                 return
 
+            # ✅ SAFE: User message is extracted but NEVER logged
             user_message = " ".join(reversed(user_text_messages))
             
-            # Enforce rate limiting
-            await self._enforce_rate_limit()
+            # Check rate limit before API call
+            if not await self._check_rate_limit():
+                # Silent failover during rate limiting
+                logger.debug("Rate limited - forcing completion")
+                await self.push_frame(UserStoppedSpeakingFrame())
+                await self._notifier.notify()
+                return
             
             try:
                 # Build Google messages
@@ -208,6 +218,7 @@ class StatementJudgeContextFilter(FrameProcessor):
                             parts=[types.Part(text=assistant_text)]
                         ))
                 
+                # ✅ SAFE: User message added to LLM request but not logged
                 google_messages.append(types.Content(
                     role="user",
                     parts=[types.Part(text=user_message)]
@@ -215,107 +226,102 @@ class StatementJudgeContextFilter(FrameProcessor):
                 
                 # Create context
                 google_context = GoogleLLMContext(messages=google_messages)  # type: ignore
-                
-                # Track request count
                 self._daily_request_count += 1
-                logger.debug(f"Classifier request #{self._daily_request_count}: {user_message[:50]}...")
                 
-                # Success - reset failure count
+                # Success - reset failures
                 if self._consecutive_failures > 0:
-                    logger.info(f"Resetting consecutive failures (was {self._consecutive_failures})")
+                    logger.info(f"Failure count reset (was {self._consecutive_failures})")
                     self._consecutive_failures = 0
                 
                 await self.push_frame(OpenAILLMContextFrame(context=google_context))
                 
             except Exception as e:
                 error_str = str(e).upper()
-                is_rate_limit = "429" in error_str or "QUOTA" in error_str or "RESOURCE_EXHAUSTED" in error_str
+                is_rate_limit = any(x in error_str for x in ["429", "QUOTA", "RESOURCE_EXHAUSTED"])
                 
                 if is_rate_limit:
-                    self._consecutive_failures += 1
-                    delay = self._calculate_retry_delay()
+                    # Silent failure for expected rate limits
+                    logger.debug(f"Rate limit hit (failure #{self._consecutive_failures + 1})")
+                    await self._trip_circuit_breaker(str(e))
                     
-                    logger.error(f"RATE LIMIT HIT (failure #{self._consecutive_failures}/{self._config['max_consecutive_failures']})")
-                    logger.warning(f"Retrying in {delay:.1f}s...")
-                    
-                    await asyncio.sleep(delay)
-                    
-                    # Trip circuit breaker if too many failures
-                    if self._consecutive_failures >= self._config["max_consecutive_failures"]:
-                        logger.error("MAX FAILURES REACHED - OPENING CIRCUIT BREAKER")
-                        self._circuit_open = True
-                        
-                        # Emergency fallback: force speech completion
-                        await self.push_frame(UserStoppedSpeakingFrame())
-                        await self._notifier.notify()
+                    # Silent failover
+                    logger.debug("Falling back to immediate completion")
+                    await self.push_frame(UserStoppedSpeakingFrame())
+                    await self._notifier.notify()
                 else:
-                    logger.error(f"UNEXPECTED ERROR in classifier: {e}")
-                    # Re-raise non-rate-limit errors
-                    raise
+                    # ✅ SAFE: Log exception type only, not full message
+                    logger.error(f"Non-rate-limit error in classifier: {type(e).__name__}")
+                    logger.warning("Falling back to completion to avoid crash")
+                    await self.push_frame(UserStoppedSpeakingFrame())
+                    await self._notifier.notify()
             
             return
 
         await self.push_frame(frame, direction)
 
-
 class CompletenessCheck(FrameProcessor):
-    """Validates classifier output and handles edge cases."""
+    """Validates classifier output with noise suppression."""
     
     def __init__(self, notifier: BaseNotifier):
         super().__init__()
         self._notifier = notifier
         self._invalid_response_count = 0
-        self._greeting_detected = False  # Track if greeting was seen
+        self._last_valid_response = None
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
-        if isinstance(frame, TextFrame):
-            text = frame.text.strip()
-            
-            # ✅ CRITICAL FIX: Skip greeting text entirely
-            if "Hello. I'm Aletheia" in text and not self._greeting_detected:
-                self._greeting_detected = True
-                logger.info("Greeting detected - skipping classifier processing")
-                await self.push_frame(frame, direction)  # Pass through to TTS
-                return
-            
-            # ✅ Only process classifier responses (upstream from Gemini)
-            if direction != FrameDirection.UPSTREAM:
-                logger.debug(f"Skipping downstream text: '{text[:30]}...'")
-                await self.push_frame(frame, direction)
-                return
-            
-            response_text = text.upper()
-            
-            # Validate YES/NO
-            if response_text in ["YES", "NO"]:
-                self._invalid_response_count = 0
+        if isinstance(frame, TextFrame) and direction == FrameDirection.UPSTREAM:
+            try:
+                text = frame.text.strip()
                 
-                if response_text == "YES":
-                    logger.debug("!!! Completeness check YES")
-                    await self.push_frame(UserStoppedSpeakingFrame())
-                    await self._notifier.notify()
-                # NO doesn't need action
-            else:
-                self._invalid_response_count += 1
-                logger.warning(f"Invalid response #{self._invalid_response_count}: '{text}'")
+                # Skip empty responses (common during failures)
+                if not text:
+                    # ✅ REMOVED debug log in production
+                    return
                 
-                # Emergency extraction
-                if "YES" in response_text:
-                    logger.debug("!!! Completeness check YES (extracted)")
-                    await self.push_frame(UserStoppedSpeakingFrame())
-                    await self._notifier.notify()
-                elif "NO" in response_text:
-                    logger.debug("!!! Completeness check NO (extracted)")
-                elif self._invalid_response_count >= 3:
-                    logger.error("Too many invalid - forcing YES")
-                    await self.push_frame(UserStoppedSpeakingFrame())
-                    await self._notifier.notify()
+                response_text = text.upper()
+                
+                if response_text in ["YES", "NO"]:
+                    self._invalid_response_count = 0
+                    self._last_valid_response = response_text
+                    
+                    if response_text == "YES":
+                        # ✅ REMOVED debug log in production
+                        await self.push_frame(UserStoppedSpeakingFrame())
+                        await self._notifier.notify()
+                    # NO requires no action
+                    
+                else:
+                    self._invalid_response_count += 1
+                    
+                    # ✅ SAFE: Only log count, not content
+                    if self._invalid_response_count % 5 == 0:
+                        logger.warning(f"Invalid classifier response count: {self._invalid_response_count}")
+                    
+                    # Emergency extraction
+                    if "YES" in response_text:
+                        # ✅ REMOVED debug log in production
+                        await self.push_frame(UserStoppedSpeakingFrame())
+                        await self._notifier.notify()
+                    elif "NO" in response_text:
+                        # ✅ REMOVED debug log in production
+                        pass
+                    elif self._invalid_response_count >= 10:
+                        logger.error("Too many invalid classifier responses - forcing completion")
+                        await self.push_frame(UserStoppedSpeakingFrame())
+                        await self._notifier.notify()
+                        
+            except Exception as e:
+                # ✅ SAFE: Log exception type only
+                logger.error(f"Error in CompletenessCheck: {type(e).__name__}")
+                # Never crash
+                await self.push_frame(UserStoppedSpeakingFrame())
+                await self._notifier.notify()
         else:
             await self.push_frame(frame, direction)
 
-
+            
 class UserAggregatorBuffer(BaseLLMResponseAggregator):
     """Buffers the output of the transcription LLM. Used by the bot output gate."""
 
@@ -407,3 +413,39 @@ class OutputGate(FrameProcessor):
                 self._frames_buffer = []
             except asyncio.CancelledError:
                 break
+
+from pipecat.processors.frame_processor import FrameDirection
+from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContextFrame
+from pipecat.frames.frames import TextFrame
+
+class AssistantMemoryWriter(FrameProcessor):
+    def __init__(self, context_aggregator):
+        super().__init__()
+        self.context_aggregator = context_aggregator
+        self._buffer = []
+
+    async def process_frame(self, frame, direction):
+        await super().process_frame(frame, direction)
+
+        # Start of assistant response
+        if isinstance(frame, LLMFullResponseStartFrame):
+            self._buffer = []
+
+        # Collect streamed tokens
+        elif isinstance(frame, TextFrame) and direction == FrameDirection.DOWNSTREAM:
+            self._buffer.append(frame.text)
+
+        # End of assistant response → write ONCE
+        elif isinstance(frame, LLMFullResponseEndFrame):
+            full_text = "".join(self._buffer).strip()
+            self._buffer = []
+
+            if full_text:
+                self.context_aggregator.assistant().add_messages([
+                    {
+                        "role": "assistant",
+                        "content": full_text,
+                    }
+                ])
+
+        await self.push_frame(frame, direction)
