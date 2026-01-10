@@ -381,63 +381,53 @@ async def check_and_activate_subscription(
             return {"found": False, "message": "Not a subscription"}
         
         # Extract details
-        price = latest_sale.get("price", 0)
-        
-        # Determine plan from price or variants
+        # Extract price (Gumroad returns it as cents)
+        price_value = latest_sale.get("price", 0)
+        try:
+            price = int(price_value) if isinstance(price_value, (int, str)) else 0
+        except (ValueError, TypeError):
+            price = 0
+
+        # Determine plan - check exact prices first
         plan_key = None
-        
-        # Check variants first (for free trials)
-        variants = latest_sale.get("variants", {})
-        tier = variants.get("Tier", "")
-        
-        if "Extended" in tier:
+
+        if price == settings.EXTENDED_PRICE:  # 5000 cents = $50
             plan_key = "extended"
-        elif "Guided" in tier:
+            logger.info(f"Detected Extended plan from price: {price}")
+            
+        elif price == settings.GUIDED_PRICE:  # 1500 cents = $15
             plan_key = "guided"
-        elif price == settings.GUIDED_PRICE:
-            plan_key = "guided"
-        elif price == settings.EXTENDED_PRICE:
-            plan_key = "extended"
+            logger.info(f"Detected Guided plan from price: {price}")
+            
         elif price == 0:
-            # Free trial - try to infer from variants
-            if tier:
-                logger.warning(f"Free trial with unknown tier: {tier}")
-            return {"found": False, "message": "Cannot determine plan for free trial"}
-        
+            # Free trial - check variants to determine plan
+            variants = latest_sale.get("variants", {})
+            tier = str(variants.get("Tier", ""))
+            
+            logger.info(f"Free trial detected, checking variants: {tier}")
+            
+            if "Extended" in tier:
+                plan_key = "extended"
+            elif "Guided" in tier:
+                plan_key = "guided"
+            else:
+                logger.warning(f"Cannot determine plan from variants: {variants}")
+                return {
+                    "found": False,
+                    "message": "Cannot determine plan for free trial"
+                }
+        else:
+            # Unknown price
+            logger.warning(f"Unknown price encountered: {price} (expected 1500 or 5000)")
+            return {
+                "found": False,
+                "message": f"Unknown price: {price}"
+            }
+
         if not plan_key:
-            logger.warning(
-                "gumroad_unknown_plan",
-                extra={"user_id": user_id, "price": price, "variants": variants}
-            )
-            return {"found": False, "message": f"Unknown plan"}
-        
-        # Check if already activated
-        existing = supabase.table("gumroad_subscriptions")\
-            .select("id")\
-            .eq("user_id", user_id)\
-            .execute()
-        
-        if existing.data and len(existing.data) > 0:
-            logger.info("subscription_already_activated", extra={"user_id": user_id})
-            return {"found": True, "already_activated": True, "plan": plan_key}
-        
-        # Activate subscription
-        supabase.table("gumroad_subscriptions").insert({
-            "id": str(uuid.uuid4()),
-            "user_id": user_id,
-            "gumroad_license_key": subscription_id,
-            "gumroad_subscription_id": subscription_id,
-            "plan_key": plan_key,
-            "status": "active",
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat()
-        }).execute()
-        
-        logger.info(
-            "subscription_activated",
-            extra={"user_id": user_id, "plan": plan_key}
-        )
-        
+            return {"found": False, "message": "Failed to determine plan"}
+
+        logger.info(f"Final plan determined: {plan_key}")
         return {
             "found": True,
             "activated": True,
