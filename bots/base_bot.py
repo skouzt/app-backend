@@ -523,7 +523,7 @@ class BaseBot(ABC):
         """
         result = (
             supabase
-            .table("daily_summaries")
+            .table("therapy_sessions")
             .select("title, summary, session_intensity")
             .eq("user_id", self.user_id)
             .eq("date", date.today().isoformat())

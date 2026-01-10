@@ -336,25 +336,24 @@ async def check_and_activate_subscription(
         raise HTTPException(400, "Email not found")
     
     try:
-        # ✅ FIX: Use GUMROAD_ACCESS_TOKEN instead of GUMROAD_API_KEY
+        # Query Gumroad Sales API
         async with httpx.AsyncClient() as client:
             res = await client.get(
                 "https://api.gumroad.com/v2/sales",
                 params={
-                    "access_token": settings.GUMROAD_ACCESS_TOKEN,  # ✅ Changed this
+                    "access_token": settings.GUMROAD_ACCESS_TOKEN,
                     "email": email,
                 },
                 timeout=10,
             )
             
-            # ✅ Add better error logging
             if not res.is_success:
                 logger.error(
                     f"Gumroad API error: {res.status_code}",
                     extra={
                         "user_id": user_id,
                         "status": res.status_code,
-                        "response": res.text[:500]  # Log first 500 chars
+                        "response": res.text[:500]
                     }
                 )
                 raise HTTPException(500, f"Gumroad API error: {res.status_code}")
@@ -380,13 +379,42 @@ async def check_and_activate_subscription(
             logger.info("gumroad_purchase_not_subscription", extra={"user_id": user_id})
             return {"found": False, "message": "Not a subscription"}
         
-        # Extract details
+        # ✅ CHECK IF ALREADY EXISTS
+        existing_check = supabase.table("gumroad_subscriptions")\
+            .select("*")\
+            .eq("gumroad_subscription_id", subscription_id)\
+            .execute()
+
+        if existing_check.data and len(existing_check.data) > 0:
+            # ✅ Cast to Dict[str, Any]
+            existing_sub: Dict[str, Any] = existing_check.data[0]  # type: ignore
+            existing_plan = existing_sub.get("plan_key", "guided")
+            
+            logger.info(
+                "subscription_already_exists",
+                extra={
+                    "user_id": user_id,
+                    "subscription_id": subscription_id,
+                    "plan": existing_plan
+                }
+            )
+            
+            return {
+                "found": True,
+                "activated": False,
+                "already_activated": True,
+                "plan": existing_plan,
+                "daily_minutes": PLAN_CONFIG[existing_plan]["daily_minutes"]
+            }
+            
         # Extract price (Gumroad returns it as cents)
         price_value = latest_sale.get("price", 0)
         try:
             price = int(price_value) if isinstance(price_value, (int, str)) else 0
         except (ValueError, TypeError):
             price = 0
+
+        logger.info(f"Processing subscription with price: {price}")
 
         # Determine plan - check exact prices first
         plan_key = None
@@ -428,15 +456,65 @@ async def check_and_activate_subscription(
             return {"found": False, "message": "Failed to determine plan"}
 
         logger.info(f"Final plan determined: {plan_key}")
-        return {
-            "found": True,
-            "activated": True,
-            "plan": plan_key,
-            "daily_minutes": PLAN_CONFIG[plan_key]["daily_minutes"]
-        }
+        
+        # ✅ INSERT INTO DATABASE
+        try:
+            # Get license key from sale
+            license_key = latest_sale.get("license_key", "")
+            
+            # Insert subscription
+            insert_result = supabase.table("gumroad_subscriptions").insert({
+                "user_id": user_id,
+                "gumroad_license_key": license_key,
+                "gumroad_subscription_id": subscription_id,
+                "plan_key": plan_key,
+                "status": "active",
+                "expires_at": None,  # Will be updated by webhooks
+                "created_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat()
+            }).execute()
+            
+            if not insert_result.data:
+                logger.error(
+                    "database_insert_failed",
+                    extra={
+                        "user_id": user_id,
+                        "subscription_id": subscription_id,
+                        "plan": plan_key
+                    }
+                )
+                raise HTTPException(500, "Failed to save subscription")
+            
+            logger.info(
+                "subscription_activated",
+                extra={
+                    "user_id": user_id,
+                    "plan": plan_key,
+                    "subscription_id": subscription_id
+                }
+            )
+            
+            return {
+                "found": True,
+                "activated": True,
+                "already_activated": False,
+                "plan": plan_key,
+                "daily_minutes": PLAN_CONFIG[plan_key]["daily_minutes"]
+            }
+            
+        except Exception as db_error:
+            logger.error(
+                "database_error",
+                extra={
+                    "user_id": user_id,
+                    "error": str(db_error)
+                },
+                exc_info=True
+            )
+            raise HTTPException(500, f"Database error: {str(db_error)}")
         
     except HTTPException:
-        raise  # Re-raise HTTP exceptions
+        raise
     except Exception as e:
         logger.error(
             "check_and_activate_error",
@@ -445,6 +523,7 @@ async def check_and_activate_subscription(
         )
         raise HTTPException(500, f"Failed to check subscription: {str(e)}")
     
+
 
 @router.post("/billing/gumroad/ping")
 async def gumroad_ping_handler(request: Request):
