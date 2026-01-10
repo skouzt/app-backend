@@ -336,18 +336,29 @@ async def check_and_activate_subscription(
         raise HTTPException(400, "Email not found")
     
     try:
-        # Query Gumroad Sales API for recent purchases by this email
+        # ✅ FIX: Use GUMROAD_ACCESS_TOKEN instead of GUMROAD_API_KEY
         async with httpx.AsyncClient() as client:
             res = await client.get(
-                f"https://api.gumroad.com/v2/sales",
+                "https://api.gumroad.com/v2/sales",
                 params={
-                    "access_token": settings.GUMROAD_API_KEY,
-                    "email": email,  # Required for lookup, but not logged
-                    "product_id": settings.GUMROAD_PRODUCT_ID,
+                    "access_token": settings.GUMROAD_ACCESS_TOKEN,  # ✅ Changed this
+                    "email": email,
                 },
                 timeout=10,
             )
-            res.raise_for_status()
+            
+            # ✅ Add better error logging
+            if not res.is_success:
+                logger.error(
+                    f"Gumroad API error: {res.status_code}",
+                    extra={
+                        "user_id": user_id,
+                        "status": res.status_code,
+                        "response": res.text[:500]  # Log first 500 chars
+                    }
+                )
+                raise HTTPException(500, f"Gumroad API error: {res.status_code}")
+            
             data = res.json()
         
         if not data.get("success"):
@@ -358,37 +369,47 @@ async def check_and_activate_subscription(
         
         if not sales or len(sales) == 0:
             logger.info("gumroad_no_purchases_found", extra={"user_id": user_id})
-            return {"found": False, "message": "No purchases found for this email"}
+            return {"found": False, "message": "No purchases found"}
         
         # Get the most recent sale
         latest_sale = sales[0]
         
         # Check if it's a subscription
-        if not latest_sale.get("subscription_id"):
+        subscription_id = latest_sale.get("subscription_id")
+        if not subscription_id:
             logger.info("gumroad_purchase_not_subscription", extra={"user_id": user_id})
-            return {"found": False, "message": "Purchase found but not a subscription"}
+            return {"found": False, "message": "Not a subscription"}
         
         # Extract details
         price = latest_sale.get("price", 0)
-        subscription_id = latest_sale.get("subscription_id")
         
-        # Determine plan from price
+        # Determine plan from price or variants
         plan_key = None
-        if price == settings.GUIDED_PRICE or price == 0:
-            variants = latest_sale.get("variants", {})
-            tier = variants.get("Tier", "")
-            if "Extended" in tier:
-                plan_key = "extended"
-            elif "Guided" in tier:
-                plan_key = "guided"
-            elif price == settings.GUIDED_PRICE:
-                plan_key = "guided"
+        
+        # Check variants first (for free trials)
+        variants = latest_sale.get("variants", {})
+        tier = variants.get("Tier", "")
+        
+        if "Extended" in tier:
+            plan_key = "extended"
+        elif "Guided" in tier:
+            plan_key = "guided"
+        elif price == settings.GUIDED_PRICE:
+            plan_key = "guided"
         elif price == settings.EXTENDED_PRICE:
             plan_key = "extended"
+        elif price == 0:
+            # Free trial - try to infer from variants
+            if tier:
+                logger.warning(f"Free trial with unknown tier: {tier}")
+            return {"found": False, "message": "Cannot determine plan for free trial"}
         
         if not plan_key:
-            logger.warning("gumroad_unknown_plan_for_price", extra={"user_id": user_id, "price": price})
-            return {"found": False, "message": f"Unknown plan for price: {price}"}
+            logger.warning(
+                "gumroad_unknown_plan",
+                extra={"user_id": user_id, "price": price, "variants": variants}
+            )
+            return {"found": False, "message": f"Unknown plan"}
         
         # Check if already activated
         existing = supabase.table("gumroad_subscriptions")\
@@ -397,11 +418,11 @@ async def check_and_activate_subscription(
             .execute()
         
         if existing.data and len(existing.data) > 0:
-            logger.info("subscription_already_activated", extra={"user_id": user_id, "plan": plan_key})
+            logger.info("subscription_already_activated", extra={"user_id": user_id})
             return {"found": True, "already_activated": True, "plan": plan_key}
         
-        # Activate the subscription
-        subscription_data = {
+        # Activate subscription
+        supabase.table("gumroad_subscriptions").insert({
             "id": str(uuid.uuid4()),
             "user_id": user_id,
             "gumroad_license_key": subscription_id,
@@ -410,13 +431,12 @@ async def check_and_activate_subscription(
             "status": "active",
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat()
-        }
+        }).execute()
         
-        supabase.table("gumroad_subscriptions")\
-            .insert(subscription_data)\
-            .execute()
-        
-        logger.info("subscription_activated_from_gumroad", extra={"user_id": user_id, "plan": plan_key})
+        logger.info(
+            "subscription_activated",
+            extra={"user_id": user_id, "plan": plan_key}
+        )
         
         return {
             "found": True,
@@ -425,9 +445,16 @@ async def check_and_activate_subscription(
             "daily_minutes": PLAN_CONFIG[plan_key]["daily_minutes"]
         }
         
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions
     except Exception as e:
-        logger.error("check_and_activate_error", extra={"user_id": user_id}, exc_info=True)
-        raise HTTPException(500, "Failed to check subscription")
+        logger.error(
+            "check_and_activate_error",
+            extra={"user_id": user_id, "error": str(e)},
+            exc_info=True
+        )
+        raise HTTPException(500, f"Failed to check subscription: {str(e)}")
+    
 
 @router.post("/billing/gumroad/ping")
 async def gumroad_ping_handler(request: Request):
