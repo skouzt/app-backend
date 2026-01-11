@@ -3,7 +3,9 @@ uvicorn[standard]==0.34.0
 aiohttp>=3.9,<3.11.13
 requests==2.31.0
 
-livekit-api>=1.0.0
+livekit==1.0.20
+livekit-api==1.0.7
+livekit-protocol==1.1.1
 
 pipecat-ai[openai,silero,google]==0.0.95
 
