@@ -26,8 +26,7 @@ class KokoroFastAPIService(TTSService):
         *,
         voice: str = "af_bella",
         speed: float = 1.0,
-        base_url: str = "http://localhost:8880",
-        endpoint: str = "/v1/audio/speech",
+        base_url: str = "https://aletheia-kokoro.shop/v1/audio/speech",
         model: str = "kokoro",
         sample_rate: int = 24000,
         **kwargs,
@@ -37,7 +36,6 @@ class KokoroFastAPIService(TTSService):
         self._voice = voice
         self._speed = speed
         self._base_url = base_url.rstrip("/")
-        self._endpoint = endpoint
         self._model = model
         
         # ✅ OPTIMIZED: Persistent session with aggressive timeouts and IPv4
@@ -60,14 +58,14 @@ class KokoroFastAPIService(TTSService):
             connector=connector
         )
         
-        logger.info(f"Kokoro FastAPI service initialized: {base_url}{endpoint}")
+        logger.info(f"Kokoro FastAPI service initialized: {base_url}")
         logger.info(f"Timeout config: total={timeout.total}s, connect={timeout.connect}s, read={timeout.sock_read}s")
 
     async def run_tts(self, text: str) -> AsyncGenerator[Frame, None]:
         """Generate speech by calling the FastAPI service with performance tracking."""
         
         start_time = time.time()
-        logger.debug(f"⏱️ TTS START: text_len={len(text)} chars, target_url={self._base_url}{self._endpoint}")
+        logger.debug(f"⏱️ TTS START: text_len={len(text)} chars, target_url={self._base_url}")
         
         try:
             # ✅ OpenAI-compatible format
@@ -81,7 +79,7 @@ class KokoroFastAPIService(TTSService):
             # ✅ Timeout wrapper to fail fast
             async with asyncio.timeout(12):
                 async with self._session.post(
-                    f"{self._base_url}{self._endpoint}",
+                    f"{self._base_url}",
                     json=payload,
                     headers={"Content-Type": "application/json"}
                 ) as response:
