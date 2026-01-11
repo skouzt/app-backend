@@ -414,12 +414,16 @@ async def end_session(payload: SessionEndRequest):
     return {"status": "completed"}
 
 if __name__ == "__main__":
+    import os
     import uvicorn
 
     logger.info("Starting FastAPI server with LiveKit")
+
+    port = int(os.environ.get("PORT", 8000))
+
     uvicorn.run(
         "main:app",
-        host=server_config.host,
-        port=server_config.port,
-        reload=server_config.reload,
+        host="0.0.0.0",
+        port=port,
+        reload=False,
     )

@@ -75,6 +75,5 @@ COPY main.py /app/main.py
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
-EXPOSE 7860
 
 CMD ["python", "main.py"]
