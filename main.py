@@ -37,7 +37,6 @@ from livekit import api
 from dotenv import load_dotenv
 load_dotenv()
 
-app = FastAPI()
 
 # Server configuration
 server_config = ServerConfig()
