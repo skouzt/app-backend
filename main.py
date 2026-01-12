@@ -12,7 +12,7 @@ import asyncio
 import hashlib  # ⭐ Added for safe referencing
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional, cast, List
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 from fastapi import FastAPI, HTTPException, Request, Depends
@@ -380,19 +380,15 @@ def get_status(pid: int):
 async def start_session(
     user_id: str = Depends(get_current_user_id),
 ):
-    today = date.today().isoformat()
-
-    supabase.table("therapy_sessions").upsert(
-        {
-            "user_id": user_id,
-            "date": today,
-        },
-        on_conflict="user_id,date",
-    ).execute()
-
+    # ✅ Use UTC consistently
+    today_utc = datetime.now(timezone.utc).date().isoformat()
+    
+    # ✅ Don't create incomplete rows
+    # Remove the upsert entirely
+    
     return {
         "status": "ok",
-        "date": today,
+        "date": today_utc,
     }
 
 @app.post("/session/end")
