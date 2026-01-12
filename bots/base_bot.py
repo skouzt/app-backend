@@ -50,7 +50,7 @@ class BaseBot(ABC):
         self.config = config
         self.user_id: str | None = None
         self.session_id = None  # Will be set when transport is initialized
-        self.api_base_url = getattr(config, 'api_base_url', 'http://localhost:7860')
+        self.api_base_url = getattr(config, 'api_base_url', 'http://localhost:8000')
         self._summary_flushed = False
         # Initialize STT service
         # ✅ NEW: Track who paused the session
@@ -518,8 +518,8 @@ class BaseBot(ABC):
 
     async def _get_existing_daily_summary(self):
         """
-        Returns existing (title, summary, intensity) for today if present.
-        One row max per day is guaranteed.
+        Returns existing (title, summary, intensity) for today ONLY if complete.
+        Returns None if row doesn't exist OR has incomplete data.
         """
         result = (
             supabase
@@ -531,17 +531,29 @@ class BaseBot(ABC):
             .execute()
         )
 
-
         if not result.data:
             return None
 
         row = cast(dict[str, Any], result.data[0])
-
-        return (
-            row.get("title"),
-            row.get("summary"),
-            row.get("session_intensity"),
-        )
+        
+        title = row.get("title")
+        summary = row.get("summary")
+        intensity = row.get("session_intensity")
+        
+        # ✅ CRITICAL: Only return if we have COMPLETE data
+        # An incomplete row should be treated as non-existent
+        if not title or not summary or intensity is None:
+            logger.info(
+                "Found incomplete daily summary row - will regenerate",
+                extra={
+                    "has_title": bool(title),
+                    "has_summary": bool(summary),
+                    "has_intensity": intensity is not None
+                }
+            )
+            return None
+        
+        return (title, summary, intensity)
 
 
     async def _generate_safe_summary(self):
@@ -555,9 +567,9 @@ class BaseBot(ABC):
         existing = await self._get_existing_daily_summary()
         user_text = self._extract_user_text()
 
-        # 🔒 Minimum signal gate
+        # 🔒 Minimum signal gate - but ONLY if existing is complete
         if len(user_text) < 10 and existing:
-            # If user barely talked AND summary already exists, reuse it
+            # existing is guaranteed to be complete (not None) due to updated _get_existing_daily_summary
             return existing
 
         try:
@@ -565,20 +577,21 @@ class BaseBot(ABC):
                 existing_title, existing_summary, existing_intensity = existing
 
                 prompt = (
-                    "You are refining a daily therapy summary.\n\n"
-                    "Existing summary:\n"
-                    f"Title: {existing_title}\n"
-                    f"Summary: {existing_summary}\n"
-                    f"Intensity: {existing_intensity}\n\n"
-                    "Based on the NEW conversation content below, refine or extend the summary.\n"
-                    "Do NOT contradict the existing summary.\n"
-                    "If no meaningful new information exists, return the existing summary unchanged.\n\n"
-                    "Respond ONLY in JSON:\n"
-                    '{ "title": "...", "summary": "...", "session_intensity": number }'
-                )
+                "You are refining a daily therapy summary.\n\n"
+                "Existing summary:\n"
+                f"Title: {existing_title}\n"
+                f"Summary: {existing_summary}\n"
+                f"Intensity: {existing_intensity}\n\n"
+                "Based on the NEW conversation content below, refine or extend the summary.\n"
+                "Do NOT contradict the existing summary.\n"
+                "If no meaningful new information exists, return the existing summary unchanged.\n\n"
+                "Respond ONLY in JSON:\n"
+                '{ "title": "...", "summary": "...", "session_intensity": number }'
+            )
             else:
                 prompt = (
                     "Summarize today's therapy interaction in a neutral, empathetic way.\n"
+                    "Write in third person without using 'user' - refer to the person naturally.\n"
                     "Then generate:\n"
                     "- a short session title (3–6 words, neutral, no advice)\n"
                     "- ONE emotional intensity score (1–10)\n\n"
@@ -587,12 +600,12 @@ class BaseBot(ABC):
                 )
 
             messages = cast(
-                    list[ChatCompletionMessageParam],
-                    [
-                        {"role": "system", "content": prompt},
-                        {"role": "user", "content": user_text},
-                    ],
-                )
+                list[ChatCompletionMessageParam],
+                [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": user_text},
+                ],
+            )
 
             client = AsyncOpenAI(
                 api_key=self.config.deepseek_api_key,
@@ -612,6 +625,8 @@ class BaseBot(ABC):
             cleaned = content.strip()
             if cleaned.startswith("```"):
                 cleaned = cleaned.split("```")[1]
+                if cleaned.startswith("json"):
+                    cleaned = cleaned[4:].strip()
 
             result = json.loads(cleaned)
 
@@ -626,17 +641,19 @@ class BaseBot(ABC):
 
             return title, summary, intensity
 
-        except Exception:
-            # 🔒 Absolute fallback
+        except Exception as e:
+            logger.error(f"Summary generation failed: {e}")
+            
+            # 🔒 Absolute fallback - but ONLY if existing is complete
             if existing:
                 return existing
 
+            # ✅ CRITICAL: Always return complete data, never None values
             return (
                 "Daily Emotional Reflection",
                 "User checked in today. Emotional reflection will continue later.",
                 3,
             )
-
 
 
     async def flush_daily_summary(self, reason: str):
@@ -649,32 +666,40 @@ class BaseBot(ABC):
             return
 
         try:
-            # 🔒 DB-level guard
+            # Check for COMPLETE summary only
             existing = await self._get_existing_daily_summary()
+            
             if existing:
-                logger.info("Daily summary already exists; skipping flush")
+                logger.info("Complete daily summary already exists; skipping flush")
                 self._summary_flushed = True
                 return
 
+            # Generate summary (will reuse incomplete row data if exists in DB)
             title, summary, intensity = await self._generate_safe_summary()
 
-            if not summary:
-                logger.info("No meaningful summary; skipping /session/end")
-                return
-            if not isinstance(title, str):
-                title = "Daily Emotional Reflection"
-            if not isinstance(intensity, int):
-                intensity = 3
+            # ✅ Validate before sending
+            if not summary or not title or intensity is None:
+                logger.error(
+                    "Generated incomplete summary - this should never happen!",
+                    extra={
+                        "has_title": bool(title),
+                        "has_summary": bool(summary),
+                        "has_intensity": intensity is not None
+                    }
+                )
+                # Force valid defaults
+                title = title or "Daily Emotional Reflection"
+                summary = summary or "Today's check-in was brief. Emotional reflection will continue later."
+                intensity = intensity if intensity is not None else 3
 
             await self._send_session_end(
-                    summary=summary,
-                    intensity=intensity,
-                    title=title,
-                )
+                summary=summary,
+                intensity=intensity,
+                title=title,
+            )
 
             self._summary_flushed = True
 
-            # ✅ SAFE: Log that summary was sent, not its content
             logger.warning(
                 "Daily summary sent",
                 extra={
@@ -686,9 +711,7 @@ class BaseBot(ABC):
             )
 
         except Exception:
-            # 🔒 NEVER crash teardown
             logger.exception("flush_daily_summary failed (non-fatal)")
-
 
 
     async def _send_session_end(self,*,title: str,summary: str,intensity: int,):
