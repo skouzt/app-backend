@@ -16,7 +16,6 @@ from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
 from pipecat.services.deepseek.llm import DeepSeekLLMService
 from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.openai.llm import OpenAILLMService
-from pipecat.services.whisper.stt import WhisperSTTService
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.transports.livekit.transport import LiveKitTransport, LiveKitParams
 from services.whisper_service import ExternalWhisperSegmentedSTTService
