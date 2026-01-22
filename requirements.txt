@@ -29,3 +29,5 @@ pydantic-settings>=2.2,<3
 typing-extensions>=4.10
 pydub==0.25.1
 structlog==24.1.0
+
+webrtcvad 

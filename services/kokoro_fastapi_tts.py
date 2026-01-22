@@ -26,7 +26,7 @@ class KokoroFastAPIService(TTSService):
         *,
         voice: str = "af_bella",
         speed: float = 1.0,
-        base_url: str = "https://aletheia-kokoro.shop",
+        base_url: str = "http://0.0.0.0:8880",
         endpoint: str = "/v1/audio/speech",
         model: str = "kokoro",
         sample_rate: int = 24000,

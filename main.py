@@ -1,15 +1,8 @@
-"""
-Main entry point for the FastAPI server.
-
-This module defines the FastAPI application, its endpoints,
-and lifecycle management. It now uses LiveKit instead of Daily.co.
-"""
-
 import os
 import subprocess
 import sys
 import asyncio
-import hashlib  # ⭐ Added for safe referencing
+import hashlib
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional, cast, List
 from datetime import datetime, timezone
@@ -195,19 +188,28 @@ async def create_livekit_token(room_name: str, identity: str) -> tuple[str, str,
         raise HTTPException(status_code=500, detail="Token generation failed")
 
 
+bot_args = []
+
 def parse_server_args():
-    """Parse server-specific arguments and store remaining args for bot processes"""
+    """Parse server-specific arguments ONLY when main.py is run directly"""
     import argparse
+
+    global bot_args
+
+    # ✅ FIX: Only parse args if main.py is being run directly
+    # When uvicorn imports main.py, __name__ is 'main', not '__main__'
+    if __name__ != '__main__':
+        bot_args = []
+        logger.info("Running via uvicorn - no CLI args parsed")
+        return
 
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--host", help="Server host")
     parser.add_argument("--port", type=int, help="Server port")
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload")
 
-    # Parse known server args and keep remaining for bots
     server_args, remaining_args = parser.parse_known_args()
 
-    # Update server config with parsed args
     global server_config
     if server_args.host:
         server_config.host = server_args.host
@@ -216,14 +218,11 @@ def parse_server_args():
     if server_args.reload:
         server_config.reload = server_config.reload
 
-    
-
-    global bot_args
     bot_args = remaining_args
+    logger.info(f"Bot args: {bot_args}")
 
-
+# ✅ STEP 4: Call parse function
 parse_server_args()
-
 
 # In main.py
 
@@ -407,6 +406,9 @@ async def end_session(payload: SessionEndRequest):
     ).execute()
 
     return {"status": "completed"}
+
+
+
 
 if __name__ == "__main__":
     import os
