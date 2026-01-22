@@ -1,26 +1,26 @@
+# API Server
 fastapi==0.115.8
 uvicorn[standard]==0.34.0
 aiohttp>=3.9,<3.11.13
 requests==2.31.0
 
+# LiveKit for real-time audio
 livekit==1.0.20
 livekit-api==1.0.7
 livekit-protocol==1.1.1
 
+# Pipecat AI pipeline (NO whisper, NO torch)
 pipecat-ai[openai,silero,google]==0.0.95
 
-faster-whisper
-tokenizers
-
+# LLM Providers
 openai==1.74.0
 google-generativeai==0.8.0
 
-torch
-torchaudio
-
+# Database & Auth
 supabase==2.13.0
 python-jose==3.3.0
 
+# Utilities
 loguru==0.7.3
 python-dotenv==1.0.1
 pytz==2025.1
@@ -30,4 +30,3 @@ typing-extensions>=4.10
 pydub==0.25.1
 structlog==24.1.0
 
-webrtcvad 
