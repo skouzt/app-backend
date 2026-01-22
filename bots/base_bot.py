@@ -3,6 +3,7 @@
 import asyncio
 import json
 from abc import ABC, abstractmethod
+import os
 from typing import Dict, Optional, List, Callable, Any, Protocol, cast
 from datetime import date, datetime
 import aiohttp
@@ -18,6 +19,8 @@ from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.whisper.stt import WhisperSTTService
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.transports.livekit.transport import LiveKitTransport, LiveKitParams
+from services.whisper_service import ExternalWhisperSegmentedSTTService
+
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import DataFrame
 from pipecat.transcriptions.language import Language
@@ -53,19 +56,23 @@ class BaseBot(ABC):
         self.api_base_url = getattr(config, 'api_base_url', 'http://localhost:8000')
         self._summary_flushed = False
         # Initialize STT service
-        # ✅ NEW: Track who paused the session
         self.pause_trigger_source: Optional[str] = None  # "idle" or "ui"
-        logger.info("Initializing Whisper STT service")
-        self.stt = WhisperSTTService(
-            model="base",
-            device="cpu",
-            compute_type="int8",
-            language=Language.EN,
-            no_speech_prob=0.6,
-            vad_filter=False,
-        )
-        logger.success("Whisper STT initialized")
 
+        logger.info("Initializing Whisper STT service")
+
+        # ✅ DEBUG: Log what we're reading
+        stt_url = os.getenv("STT_SERVICE_URL")
+        api_key = os.getenv("STT_API_KEY")
+
+        logger.info(f"STT_SERVICE_URL from env: {stt_url}")
+        logger.info(f"STT_API_KEY from env: {'***' + api_key[-8:] if api_key else 'None'}")
+
+        if not stt_url or not api_key:
+            raise ValueError("STT_SERVICE_URL and STT_API_KEY must be set in environment")
+
+        # ✅ This will use the values you pass, not env vars
+        self.stt = ExternalWhisperSegmentedSTTService(stt_url=stt_url, api_key=api_key)
+        logger.success(f"Whisper STT initialized with URL: {stt_url}")
         # Initialize TTS service
         logger.info(f"Initializing TTS service: {config.tts_provider}")
         match config.tts_provider:                
@@ -136,7 +143,7 @@ class BaseBot(ABC):
             vad_analyzer=SileroVADAnalyzer(
                 params=VADParams(
                     confidence=0.7,
-                    start_secs=0.3,
+                    start_secs=0.2,
                     stop_secs=0.7,
                     min_volume=0.4
                 )
@@ -151,7 +158,7 @@ class BaseBot(ABC):
             callback=self._handle_user_idle,  
             timeout=40.0
         )
-        logger.info("User idle processor initialized (55s timeout)")
+        logger.info("User idle processor initialized (40s timeout)")
 
         # Initialize transport and task (will be set up later)
         self.transport: Optional[LiveKitTransport] = None
@@ -358,6 +365,7 @@ class BaseBot(ABC):
         except Exception as e:
             logger.error(f"Error during idle transition: {e}")
             self.is_idle = False
+    
     async def pause_session(self, trigger_source: str = "idle"):
         """
         Pause the session: stop Pipecat + disable audio input + notify UI.
@@ -557,13 +565,7 @@ class BaseBot(ABC):
 
 
     async def _generate_safe_summary(self):
-        """
-        Disconnect-safe summary generation.
-        DeepSeek-only. Pragmatic. Stable.
-        Returns: (title, summary, session_intensity)
-        """
-
-        # 1️⃣ Check DB first (source of truth)
+       
         existing = await self._get_existing_daily_summary()
         user_text = self._extract_user_text()
 
@@ -577,27 +579,40 @@ class BaseBot(ABC):
                 existing_title, existing_summary, existing_intensity = existing
 
                 prompt = (
-                "You are refining a daily therapy summary.\n\n"
-                "Existing summary:\n"
-                f"Title: {existing_title}\n"
-                f"Summary: {existing_summary}\n"
-                f"Intensity: {existing_intensity}\n\n"
-                "Based on the NEW conversation content below, refine or extend the summary.\n"
-                "Do NOT contradict the existing summary.\n"
-                "If no meaningful new information exists, return the existing summary unchanged.\n\n"
-                "Respond ONLY in JSON:\n"
-                '{ "title": "...", "summary": "...", "session_intensity": number }'
-            )
+                        "You are refining a daily therapy summary.\n\n"
+                        "Existing summary:\n"
+                        f"Title: {existing_title}\n"
+                        f"Summary: {existing_summary}\n"
+                        f"Intensity: {existing_intensity}\n\n"
+                        "Based on the NEW conversation content below, refine or extend the summary.\n"
+                        "Do NOT contradict the existing summary.\n"
+                        "If no meaningful new information exists, return the existing summary unchanged.\n\n"
+                        "Respond ONLY in JSON:\n"
+                        '{ "title": "...", "summary": "...", "session_intensity": number }'
+                    )
             else:
-                prompt = (
-                    "Summarize today's therapy interaction in a neutral, empathetic way.\n"
-                    "Write in third person without using 'user' - refer to the person naturally.\n"
-                    "Then generate:\n"
-                    "- a short session title (3–6 words, neutral, no advice)\n"
-                    "- ONE emotional intensity score (1–10)\n\n"
-                    "Respond ONLY in JSON:\n"
-                    '{ "title": "...", "summary": "...", "session_intensity": number }'
-                )
+                    prompt = (
+                        "Summarize today's therapy interaction in a neutral, empathetic way.\n"
+                        "Write in first-person plural using 'we' to reflect the collaborative nature of therapy.\n"
+                        "Examples: 'We explored feelings of...', 'We discussed challenges with...', 'We reflected on...'\n"
+                        "Focus on what was discussed, explored, or worked through together.\n\n"
+                        "Then generate:\n"
+                        "- a short session title (3–6 words, neutral, no advice)\n"
+                        "- ONE emotional intensity score (1–10) based on this scale:\n"
+                        "  1 = Too much (crisis level, overwhelming distress)\n"
+                        "  2 = Anxious (high anxiety, very worried)\n"
+                        "  3 = Overwhelmed (struggling to cope)\n"
+                        "  4 = Strained (under significant pressure)\n"
+                        "  5 = Heavy (burdened, weighed down)\n"
+                        "  6 = Uneasy (uncomfortable, somewhat troubled)\n"
+                        "  7 = Neutral (neither good nor bad, stable)\n"
+                        "  8 = Light (mostly positive, manageable)\n"
+                        "  9 = Okay (doing well, comfortable)\n"
+                        "  10 = At ease (calm, peaceful, grounded)\n\n"
+                        "Choose the intensity that best matches the overall emotional tone of the session.\n\n"
+                        "Respond ONLY in JSON:\n"
+                        '{ "title": "...", "summary": "...", "session_intensity": number }'
+                    )
 
             messages = cast(
                 list[ChatCompletionMessageParam],
@@ -657,107 +672,142 @@ class BaseBot(ABC):
 
 
     async def flush_daily_summary(self, reason: str):
-        """
-        Finalizes and sends daily summary.
-        Idempotent. DB-safe. Disconnect-safe.
-        """
-
         if getattr(self, "_summary_flushed", False):
             return
 
         try:
-            # Check for COMPLETE summary only
+            # 1️⃣ Check if complete summary already exists
             existing = await self._get_existing_daily_summary()
-            
             if existing:
                 logger.info("Complete daily summary already exists; skipping flush")
                 self._summary_flushed = True
                 return
 
-            # Generate summary (will reuse incomplete row data if exists in DB)
+            # 2️⃣ Generate summary
             title, summary, intensity = await self._generate_safe_summary()
 
-            # ✅ Validate before sending
+            # 3️⃣ Validate
             if not summary or not title or intensity is None:
                 logger.error(
-                    "Generated incomplete summary - this should never happen!",
+                    "Generated incomplete summary - forcing defaults",
                     extra={
                         "has_title": bool(title),
                         "has_summary": bool(summary),
-                        "has_intensity": intensity is not None
-                    }
+                        "has_intensity": intensity is not None,
+                    },
                 )
-                # Force valid defaults
                 title = title or "Daily Emotional Reflection"
-                summary = summary or "Today's check-in was brief. Emotional reflection will continue later."
+                summary = summary or (
+                    "Today's check-in was brief. Emotional reflection will continue later."
+                )
                 intensity = intensity if intensity is not None else 3
 
+            # 4️⃣ SEND — this must succeed
             await self._send_session_end(
+                title=title,
                 summary=summary,
                 intensity=intensity,
-                title=title,
             )
 
+            # 5️⃣ Mark flushed ONLY after success
             self._summary_flushed = True
 
             logger.warning(
                 "Daily summary sent",
                 extra={
                     "user_id": self.user_id,
-                    "summary_length": len(summary) if summary else 0,
-                    "has_title": bool(title),
-                    "has_intensity": intensity is not None
-                }
+                    "summary_length": len(summary),
+                    "has_title": True,
+                    "has_intensity": True,
+                },
             )
 
         except Exception:
-            logger.exception("flush_daily_summary failed (non-fatal)")
-
-
-    async def _send_session_end(self,*,title: str,summary: str,intensity: int,):
-        # 🔒 Hard guard — fail early, not at FastAPI
-        if not getattr(self, "user_id", None):
-            logger.error("Cannot send session end: user_id is missing")
+            logger.exception(
+                "Session end failed; summary NOT flushed — will retry later"
+            )
             return
 
+    
+
+    async def _send_session_end(self, *, title: str, summary: str, intensity: int):
+        """Send session end to main backend API"""
+        
+        if not getattr(self, "user_id", None):
+            logger.error("❌ Cannot send session end: user_id is missing")
+            return False
+
+        # ✅ Use your main backend URL, NOT the STT service
+        backend_url = os.getenv("BACKEND_API_URL", "http://localhost:8080")
+        endpoint = f"{backend_url}/session/end"
+        
         payload = {
             "user_id": self.user_id,
             "title": title,
             "summary": summary,
             "session_intensity": intensity,
         }
+        
+        logger.info(f"📤 Sending session end to: {endpoint}")
+        logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
 
-        # ✅ SAFE: Log the event, not the payload
-        logger.warning(
-            "Session end notification sent",
-            extra={
-                "user_id": self.user_id,
-                "endpoint": "/session/end",
-                "status": "sent"
+        try:
+            # ✅ No authentication needed
+            headers = {
+                "Content-Type": "application/json"
             }
-        )
 
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.post(
-                f"{self.api_base_url}/session/end",
-                json=payload,
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(endpoint, json=payload, headers=headers)
+
+                resp.raise_for_status()
+                
+            logger.info("✅ Session end stored successfully")
+            return True
+
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"❌ Session end HTTP error: {e.response.status_code}\n"
+                f"Response: {e.response.text[:1000]}\n"
+                f"Endpoint: {endpoint}"
             )
+            return False
 
-            if resp.status_code != 200:
-                # ✅ SAFE: Log sanitized error info
-                logger.error(
-                    "Session end request failed",
-                    extra={
-                        "user_id": self.user_id,
-                        "status_code": resp.status_code,
-                        "response_length": len(resp.text) if resp.text else 0
-                    }
-                )
-            else:
-                logger.info("Session end stored successfully")
+        except httpx.ConnectError as e:
+            logger.error(f"❌ Cannot connect to backend at {endpoint}: {e}")
+            return False
 
+        except Exception as e:
+            logger.exception("❌ Session end unexpected error")
+            return False
+        
 
-    @abstractmethod
     async def _handle_first_participant(self):
-        """Override in subclass to handle the first participant joining."""
-        pass
+        """
+        Default greeting when the first participant joins the session.
+        Sends a warm welcome message and can be overridden in subclasses
+        for custom initialization behavior.
+        """
+        logger.info("🔔 First participant joined - preparing greeting")
+        
+        # CRITICAL: Wait for pipeline to be fully ready
+        if not self.task:
+            logger.warning("⏳ Pipeline not ready yet - waiting 1 second...")
+            await asyncio.sleep(1.0)
+            
+            # Check again after waiting
+            if not self.task:
+                logger.error("❌ Cannot send greeting: pipeline task is still not ready")
+                return
+        
+        greeting = "Hello there! I'm here to listen whenever you're ready to share."
+        
+        try:
+            await self.task.queue_frames([
+                BotStartedSpeakingFrame(),
+                TextFrame(greeting),
+                BotStoppedSpeakingFrame(),
+            ])
+            logger.info("✅ Greeting sent successfully!")
+        except Exception as e:
+            logger.error(f"❌ Failed to send greeting: {e}")
