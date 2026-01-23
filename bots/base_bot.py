@@ -43,37 +43,27 @@ from loguru import logger
 
 
 class LLMServiceProtocol(Protocol):
-    """Protocol defining the interface for LLM services that support direct completion."""
     async def complete(self, context: OpenAILLMContext) -> str: ...
 class BaseBot(ABC):
  
     def __init__(self, config, system_messages: Optional[List[ChatCompletionMessageParam]] = None):
-        """Initialize bot with core services and enhanced idle handling."""
         self.config = config
         self.user_id: str | None = None
-        self.session_id = None  # Will be set when transport is initialized
+        self.session_id = None  
         self.api_base_url = getattr(config, 'api_base_url', 'http://localhost:8000')
         self._summary_flushed = False
-        # Initialize STT service
-        self.pause_trigger_source: Optional[str] = None  # "idle" or "ui"
+        self.pause_trigger_source: Optional[str] = None  
 
-        logger.info("Initializing Whisper STT service")
 
-        # ✅ DEBUG: Log what we're reading
         stt_url = os.getenv("STT_SERVICE_URL")
         api_key = os.getenv("STT_API_KEY")
 
-        logger.info(f"STT_SERVICE_URL from env: {stt_url}")
-        logger.info(f"STT_API_KEY from env: {'***' + api_key[-8:] if api_key else 'None'}")
 
         if not stt_url or not api_key:
             raise ValueError("STT_SERVICE_URL and STT_API_KEY must be set in environment")
 
-        # ✅ This will use the values you pass, not env vars
         self.stt = ExternalWhisperSegmentedSTTService(stt_url=stt_url, api_key=api_key)
-        logger.success(f"Whisper STT initialized with URL: {stt_url}")
         # Initialize TTS service
-        logger.info(f"Initializing TTS service: {config.tts_provider}")
         match config.tts_provider:                
             case "kokoro_fastapi":
                 from services.kokoro_fastapi_tts import KokoroFastAPIService
@@ -83,15 +73,12 @@ class BaseBot(ABC):
                     base_url=config.kokoro_fastapi_url,
                     endpoint=config.kokoro_fastapi_endpoint,
                 )
-                logger.success(f"Kokoro FastAPI TTS initialized: {config.kokoro_fastapi_url}")
                 
             case _:
                 raise ValueError(f"Invalid TTS provider: {config.tts_provider}")
             
             
 
-        # Initialize LLM service only (NO CLASSIFIER)
-        logger.info(f"Initializing LLM service: {config.llm_provider}")
         match config.llm_provider:
             case "deepseek":
                 if not config.deepseek_api_key:
@@ -102,7 +89,6 @@ class BaseBot(ABC):
                     base_url="https://api.deepseek.com/v1",
                     params=config.deepseek_params,
                 )
-                logger.success("DeepSeek LLM initialized")
                 
             case "google":
                 if not config.google_api_key:
@@ -113,7 +99,6 @@ class BaseBot(ABC):
                     params=config.google_params,
                     system_instruction="You are a helpful voice assistant.",
                 )
-                logger.success("Google LLM initialized")
                 
             case "openai":
                 if not config.openai_api_key:
@@ -123,16 +108,13 @@ class BaseBot(ABC):
                     model=config.openai_model,
                     params=config.openai_params,
                 )
-                logger.success("OpenAI LLM initialized")
                 
             case _:
                 raise ValueError(f"Invalid LLM provider: {config.llm_provider}")
 
-        # Initialize context (NO CLASSIFIER)
         self.context = OpenAILLMContext(messages=system_messages or [])
         self.context_aggregator = self.conversation_llm.create_context_aggregator(self.context)
 
-        logger.info("Initialized bot with simplified pipeline (NO classifier)")
         self.assistant_memory_writer = AssistantMemoryWriter(self.context_aggregator)
 
         self.transport_params = LiveKitParams(
@@ -149,47 +131,30 @@ class BaseBot(ABC):
             ),
         )
 
-        # Initialize RTVI
         self.rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
 
-        # Initialize idle processor with 55-second timeout
         self.user_idle = UserIdleProcessor(
             callback=self._handle_user_idle,  
             timeout=40.0
         )
-        logger.info("User idle processor initialized (40s timeout)")
 
-        # Initialize transport and task (will be set up later)
         self.transport: Optional[LiveKitTransport] = None
         self.task: Optional[PipelineTask] = None
         self.runner: Optional[PipelineRunner] = None
 
-        # ✅ PAUSE/RESUME STATE MANAGEMENT
         self.is_idle = False
-        logger.info("Pause/resume state management initialized")
 
     async def setup_transport(self, url: str, token: str, room_name: str):
-        """
-        Set up the LiveKit transport.
-        
-        IMPORTANT: For LiveKit, `url` should be the base WebSocket URL of your LiveKit server,
-        e.g., "wss://your-livekit-server.com" (NO path, NO /rtc suffix)
-        
-        Args:
-            url: Base WebSocket URL (wss://your-server.com)
-            token: LiveKit access token for the bot
-            room_name: Name of the room to join
-        """
+       
         url = url.rstrip('/')
         if '/rtc' in url:
             logger.warning("URL contains '/rtc' - consider using base URL only (e.g., wss://your-server.com)")
         
         self.transport = LiveKitTransport(url, token, self.config.bot_name, self.transport_params)
-        self.session_id = room_name  # Use room_name as session_id
+        self.session_id = room_name  
 
         @self.transport.event_handler("on_participant_disconnected")
         async def on_participant_disconnected(transport, participant, reason=None):
-            """Handle participant disconnection"""
             participant_id = participant if participant else 'unknown'
             logger.info(f"Participant disconnected: {participant_id}")
             await self.flush_daily_summary(reason="participant_disconnected")
@@ -198,54 +163,37 @@ class BaseBot(ABC):
 
         @self.transport.event_handler("on_participant_connected")
         async def on_participant_connected(transport, participant):
-            """Handle participant connection"""
             participant_id = participant.identity if participant else 'unknown'
-            logger.info(f"Participant connected: {participant_id}")
             await transport.capture_participant_audio(participant.sid)
             await self._handle_first_participant()
 
         @self.transport.event_handler("on_data_received")
         async def on_data_received(transport, data, participant):
-            """Handle incoming data messages."""
             try:
                 message_str = data.decode("utf-8")
                 payload = json.loads(message_str)
                 
-                # ✅ SAFE: Log event type only, not content
                 payload_type = payload.get("type", "unknown")
                 if payload_type == "session_control":
                     action = payload.get("action", "unknown")
-                    logger.info(
-                        "UI control received",
-                        extra={"type": payload_type, "action": action}
-                    )
-                else:
-                    # For message types, just acknowledge receipt
-                    logger.info(
-                        "UI data received",
-                        extra={"type": payload_type, "has_message": "message" in payload}
-                    )
 
-                # ✅ STRUCTURED SESSION CONTROL
+               
+
                 if payload.get("type") == "session_control":
                     action = payload.get("action")
 
                     if action == "pause" and not self.is_idle:
-                        logger.info("UI requested PAUSE")
                         await self.pause_session(trigger_source="ui")
                         
                     elif action == "resume" and self.is_idle:
-                        logger.info("UI requested RESUME")
                         await self.resume_session(trigger_source="ui")
                         
-                    return  # Stop here for control messages
+                    return  
 
-                # 🧓 Extract message and user info for voice processing
                 text_message = payload.get("message", "")
                 user_id = participant.identity if participant else "unknown"
                 normalized_msg = text_message.strip().lower()
 
-                # Voice resume only works if paused by "idle"
                 if self.is_idle and self.pause_trigger_source == "idle":
                     if normalized_msg in ["hello", "hi", "hey", "ok", "continue"]:
                         logger.info("Voice resume detected", extra={"user_id": user_id})
@@ -256,11 +204,9 @@ class BaseBot(ABC):
                 logger.exception("Error handling data message")
 
     def create_pipeline(self):
-        """Create the processing pipeline - SIMPLIFIED (NO CLASSIFIER)."""
         if not self.transport:
             raise RuntimeError("Transport must be set up before creating pipeline")
 
-        logger.info("Creating simplified pipeline (NO classifier)")
 
         pipeline = Pipeline([
             self.rtvi,
@@ -286,7 +232,6 @@ class BaseBot(ABC):
         self.runner = PipelineRunner()
         
     async def start(self):
-        """Start the bot's main task."""
         if not self.runner or not self.task:
             raise RuntimeError("Bot not properly initialized. Call create_pipeline first.")
         await self.runner.run(self.task)
@@ -304,7 +249,6 @@ class BaseBot(ABC):
         except Exception as e:
             logger.error(f"Error during session finalization: {e}")
 
-        # Stop pipeline
         if self.runner:
             await self.runner.stop_when_done()
 
@@ -316,26 +260,14 @@ class BaseBot(ABC):
 
     
 
-    # ✅ PAUSE/RESUME METHODS (CORRECTED)
     async def _handle_user_idle(self, processor: Optional[UserIdleProcessor] = None):
-        """
-        PAUSE SESSION: Called after 55 seconds of user silence.
-        Sets session to idle state and notifies frontend.
-        """
-        # Prevent re-triggering if already idle
+      
         if self.is_idle:
-            logger.debug("Already in idle state, ignoring duplicate idle trigger")
             return
-            
-        logger.warning(
-            "User idle timeout triggered",
-            extra={"session_id": self.session_id, "timeout_seconds": 55.0}
-        )
         
         self.is_idle = True
         
         try:
-            # Notify frontend to show "paused" UI state
             await self._notify_frontend_state_change("idle")
             
             pause_message = (
@@ -344,7 +276,6 @@ class BaseBot(ABC):
                 "click play when you're back."
             )
             
-            logger.info("Sending pause notification")
             
             if self.task:
                 await self.task.queue_frames([
@@ -353,46 +284,30 @@ class BaseBot(ABC):
                     BotStoppedSpeakingFrame(),
                 ])
             
-            # Save session state while idle (optional but recommended)
             save_method: Optional[Callable] = getattr(self, 'save_session_data', None)
             if callable(save_method):
-                logger.info("Saving session snapshot during idle")
                 save_method()
             
-            logger.info("Session paused")
             
         except Exception as e:
-            logger.error(f"Error during idle transition: {e}")
             self.is_idle = False
     
     async def pause_session(self, trigger_source: str = "idle"):
-        """
-        Pause the session: stop Pipecat + disable audio input + notify UI.
-        """
         if self.is_idle:
-            logger.debug("Already idle, ignoring pause request")
             return
-            
-        logger.info(
-            "Session paused",
-            extra={"session_id": self.session_id, "trigger_source": trigger_source}
-        )
+        
         self.is_idle = True
         self.pause_trigger_source = trigger_source
         
         try:
-            # 1. **STOP AUDIO INPUT** (prevent new speech detection)
             if hasattr(self.user_idle, 'stop'):
                 self.user_idle.stop()  # type: ignore # Stop idle timer
             
-            # 2. **INTERRUPT** current pipeline (stop speaking)
             if self.task:
                 await self.task.queue_frames([StartInterruptionFrame()])
             
-            # 3. Notify frontend UI
             await self._notify_frontend_state_change("idle")
             
-            # 4. Send voice notification (only for idle timeout)
             if trigger_source == "idle":
                 pause_message = (
                     "It seems like you may have stepped away. I've paused our session "
@@ -400,7 +315,6 @@ class BaseBot(ABC):
                     "click play when you're back."
                 )
                 
-                logger.info("Sending pause notification")
                 if self.task:
                     await self.task.queue_frames([
                         BotStartedSpeakingFrame(),
@@ -408,13 +322,10 @@ class BaseBot(ABC):
                         BotStoppedSpeakingFrame(),
                     ])
             
-            # 5. Save snapshot
             save_method = getattr(self, 'save_session_data', None)
             if callable(save_method):
-                logger.info("Saving session snapshot during pause")
                 save_method()
                 
-            logger.info("Session paused")
             
         except Exception as e:
             logger.error(f"Error during pause: {e}")
@@ -422,14 +333,11 @@ class BaseBot(ABC):
             self.pause_trigger_source = None
 
     async def resume_session(self, trigger_source: str = "voice"):
-        """
-        Resume the session — with source enforcement + restart audio input.
-        """
+        
         if not self.is_idle:
             logger.debug("Session is not idle, ignoring resume request")
             return
         
-        # ⭐ ENFORCEMENT: Button-only resume for UI-paused sessions
         if self.pause_trigger_source == "ui" and trigger_source != "ui":
             logger.warning(
                 "UI-paused session attempted voice resume",
@@ -446,14 +354,11 @@ class BaseBot(ABC):
         self.pause_trigger_source = None
         
         try:
-            # 1. **RESTART AUDIO INPUT** (re-enable speech detection)
             if hasattr(self.user_idle, 'start'):
                 self.user_idle.start()  # type: ignore # Restart idle timer
             
-            # 2. Notify frontend
             await self._notify_frontend_state_change("active")
             
-            # 3. Voice acknowledgment (only for voice resume)
             if trigger_source == "voice":
                 welcome_back = "Welcome back! Let's continue."
                 if self.task:
@@ -470,12 +375,8 @@ class BaseBot(ABC):
             self.is_idle = True
 
     async def _notify_frontend_state_change(self, state: str):
-        """
-        Send session state via LiveKit data channel — using the correct internal API.
-        """
         try:
-            # ✅ Access the ACTUAL LiveKit room (not the wrapper)
-            # Pipecat v0.0.x stores it in _client._room or _client.room
+            
             room = self.transport._client._room  # type: ignore
             
             if not room or not hasattr(room, 'local_participant'):
@@ -495,7 +396,6 @@ class BaseBot(ABC):
 
         except AttributeError as e:
             logger.error(f"LiveKit room attribute error: {e}")
-            # Debug: log available attributes
             if hasattr(self.transport, '_client'):  # type: ignore
                 client = self.transport._client  # type: ignore
                 logger.debug(f"Transport client attributes: {dir(client)}")
@@ -514,7 +414,6 @@ class BaseBot(ABC):
             if isinstance(content, str):
                 texts.append(content)
             elif isinstance(content, list):
-                # Handle OpenAI content-part format
                 for part in content:
                     if isinstance(part, dict) and part.get("type") == "text":
                         text = part.get("text")
@@ -524,10 +423,7 @@ class BaseBot(ABC):
         return " ".join(texts).strip()
 
     async def _get_existing_daily_summary(self):
-        """
-        Returns existing (title, summary, intensity) for today ONLY if complete.
-        Returns None if row doesn't exist OR has incomplete data.
-        """
+       
         result = (
             supabase
             .table("therapy_sessions")
@@ -547,8 +443,7 @@ class BaseBot(ABC):
         summary = row.get("summary")
         intensity = row.get("session_intensity")
         
-        # ✅ CRITICAL: Only return if we have COMPLETE data
-        # An incomplete row should be treated as non-existent
+    
         if not title or not summary or intensity is None:
             logger.info(
                 "Found incomplete daily summary row - will regenerate",
@@ -568,9 +463,7 @@ class BaseBot(ABC):
         existing = await self._get_existing_daily_summary()
         user_text = self._extract_user_text()
 
-        # 🔒 Minimum signal gate - but ONLY if existing is complete
         if len(user_text) < 10 and existing:
-            # existing is guaranteed to be complete (not None) due to updated _get_existing_daily_summary
             return existing
 
         try:
@@ -658,11 +551,9 @@ class BaseBot(ABC):
         except Exception as e:
             logger.error(f"Summary generation failed: {e}")
             
-            # 🔒 Absolute fallback - but ONLY if existing is complete
             if existing:
                 return existing
 
-            # ✅ CRITICAL: Always return complete data, never None values
             return (
                 "Daily Emotional Reflection",
                 "User checked in today. Emotional reflection will continue later.",
@@ -671,72 +562,41 @@ class BaseBot(ABC):
 
 
     async def flush_daily_summary(self, reason: str):
-        if getattr(self, "_summary_flushed", False):
-            return
-
         try:
-            # 1️⃣ Check if complete summary already exists
             existing = await self._get_existing_daily_summary()
-            if existing:
-                logger.info("Complete daily summary already exists; skipping flush")
-                self._summary_flushed = True
+
+            if existing and getattr(self, "_summary_flushed", False):
                 return
 
-            # 2️⃣ Generate summary
             title, summary, intensity = await self._generate_safe_summary()
 
-            # 3️⃣ Validate
             if not summary or not title or intensity is None:
-                logger.error(
-                    "Generated incomplete summary - forcing defaults",
-                    extra={
-                        "has_title": bool(title),
-                        "has_summary": bool(summary),
-                        "has_intensity": intensity is not None,
-                    },
-                )
+                
                 title = title or "Daily Emotional Reflection"
                 summary = summary or (
                     "Today's check-in was brief. Emotional reflection will continue later."
                 )
                 intensity = intensity if intensity is not None else 3
 
-            # 4️⃣ SEND — this must succeed
             await self._send_session_end(
                 title=title,
                 summary=summary,
                 intensity=intensity,
             )
 
-            # 5️⃣ Mark flushed ONLY after success
             self._summary_flushed = True
-
-            logger.warning(
-                "Daily summary sent",
-                extra={
-                    "user_id": self.user_id,
-                    "summary_length": len(summary),
-                    "has_title": True,
-                    "has_intensity": True,
-                },
-            )
 
         except Exception:
             logger.exception(
                 "Session end failed; summary NOT flushed — will retry later"
             )
-            return
 
-    
 
     async def _send_session_end(self, *, title: str, summary: str, intensity: int):
-        """Send session end to main backend API"""
         
         if not getattr(self, "user_id", None):
-            logger.error("❌ Cannot send session end: user_id is missing")
             return False
 
-        # ✅ Use your main backend URL, NOT the STT service
         backend_url = os.getenv("BACKEND_API_URL", "http://localhost:8080")
         endpoint = f"{backend_url}/session/end"
         
@@ -751,7 +611,6 @@ class BaseBot(ABC):
         logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
 
         try:
-            # ✅ No authentication needed
             headers = {
                 "Content-Type": "application/json"
             }
@@ -761,35 +620,21 @@ class BaseBot(ABC):
 
                 resp.raise_for_status()
                 
-            logger.info("✅ Session end stored successfully")
             return True
 
         except httpx.HTTPStatusError as e:
-            logger.error(
-                f"❌ Session end HTTP error: {e.response.status_code}\n"
-                f"Response: {e.response.text[:1000]}\n"
-                f"Endpoint: {endpoint}"
-            )
+            
             return False
 
         except httpx.ConnectError as e:
-            logger.error(f"❌ Cannot connect to backend at {endpoint}: {e}")
             return False
 
         except Exception as e:
-            logger.exception("❌ Session end unexpected error")
             return False
         
 
     async def _handle_first_participant(self):
-        """
-        Default greeting when the first participant joins the session.
-        Sends a warm welcome message and can be overridden in subclasses
-        for custom initialization behavior.
-        """
-        logger.info("🔔 First participant joined - preparing greeting")
-        
-        # CRITICAL: Wait for pipeline to be fully ready
+
         if not self.task:
             logger.warning("⏳ Pipeline not ready yet - waiting 1 second...")
             await asyncio.sleep(1.0)
@@ -807,6 +652,5 @@ class BaseBot(ABC):
                 TextFrame(greeting),
                 BotStoppedSpeakingFrame(),
             ])
-            logger.info("✅ Greeting sent successfully!")
         except Exception as e:
             logger.error(f"❌ Failed to send greeting: {e}")
