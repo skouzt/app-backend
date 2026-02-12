@@ -18,7 +18,13 @@ from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.transports.livekit.transport import LiveKitTransport, LiveKitParams
-from services.whisper_service import ExternalWhisperSegmentedSTTService
+
+# ── STT: Deepgram ──────────────────────────────────────────────────────────────
+from pipecat.services.deepgram.stt import DeepgramSTTService
+from deepgram import LiveOptions
+
+# ── TTS: Google ────────────────────────────────────────────────────────────────
+from pipecat.services.google.tts import GoogleTTSService
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import DataFrame
@@ -41,44 +47,54 @@ from openai.types.chat import ChatCompletionMessageParam
 from loguru import logger
 
 
-
 class LLMServiceProtocol(Protocol):
     async def complete(self, context: OpenAILLMContext) -> str: ...
+
+
 class BaseBot(ABC):
- 
+
     def __init__(self, config, system_messages: Optional[List[ChatCompletionMessageParam]] = None):
         self.config = config
         self.user_id: str | None = None
-        self.session_id = None  
+        self.session_id = None
         self.api_base_url = getattr(config, 'api_base_url', 'http://localhost:8000')
         self._summary_flushed = False
-        self.pause_trigger_source: Optional[str] = None  
+        self.pause_trigger_source: Optional[str] = None
 
+        # ── STT: Deepgram ──────────────────────────────────────────────────────
+        deepgram_api_key = os.getenv("DEEPGRAM_API_KEY")
+        if not deepgram_api_key:
+            raise ValueError("DEEPGRAM_API_KEY must be set in environment")
 
-        stt_url = os.getenv("STT_SERVICE_URL")
-        api_key = os.getenv("STT_API_KEY")
+        self.stt = DeepgramSTTService(
+            api_key=deepgram_api_key,
+            live_options=LiveOptions(
+                model="nova-3",
+                language="en-US",
+                smart_format=True,
+                punctuate=True,
+                filler_words=False,
+                interim_results=True,
+                utterance_end_ms="1000",
+                vad_events=True,
+            ),
+        )
 
+        # ── TTS: Google ────────────────────────────────────────────────────────
+        google_credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+        if not google_credentials_json:
+            raise ValueError("GOOGLE_CREDENTIALS_JSON must be set in environment (service account JSON)")
 
-        if not stt_url or not api_key:
-            raise ValueError("STT_SERVICE_URL and STT_API_KEY must be set in environment")
+        self.tts = GoogleTTSService(
+            credentials=google_credentials_json,  # Full JSON string, not API key
+            voice_id=getattr(config, "google_tts_voice", "en-US-Neural2-F"),
+            params=GoogleTTSService.InputParams(
+                language="en-US",
+                speaking_rate=getattr(config, "google_tts_speed", 1.0),
+            ),
+        )
 
-        self.stt = ExternalWhisperSegmentedSTTService(stt_url=stt_url, api_key=api_key)
-        # Initialize TTS service
-        match config.tts_provider:                
-            case "kokoro_fastapi":
-                from services.kokoro_fastapi_tts import KokoroFastAPIService
-                self.tts = KokoroFastAPIService(
-                    voice=config.kokoro_voice,
-                    speed=config.kokoro_speed,
-                    base_url=config.kokoro_fastapi_url,
-                    endpoint=config.kokoro_fastapi_endpoint,
-                )
-                
-            case _:
-                raise ValueError(f"Invalid TTS provider: {config.tts_provider}")
-            
-            
-
+        # ── LLM ───────────────────────────────────────────────────────────────
         match config.llm_provider:
             case "deepseek":
                 if not config.deepseek_api_key:
@@ -89,7 +105,7 @@ class BaseBot(ABC):
                     base_url="https://api.deepseek.com/v1",
                     params=config.deepseek_params,
                 )
-                
+
             case "google":
                 if not config.google_api_key:
                     raise ValueError("Google API key is required")
@@ -99,7 +115,7 @@ class BaseBot(ABC):
                     params=config.google_params,
                     system_instruction="You are a helpful voice assistant.",
                 )
-                
+
             case "openai":
                 if not config.openai_api_key:
                     raise ValueError("OpenAI API key is required")
@@ -108,7 +124,7 @@ class BaseBot(ABC):
                     model=config.openai_model,
                     params=config.openai_params,
                 )
-                
+
             case _:
                 raise ValueError(f"Invalid LLM provider: {config.llm_provider}")
 
@@ -126,7 +142,7 @@ class BaseBot(ABC):
                     confidence=0.7,
                     start_secs=0.2,
                     stop_secs=0.7,
-                    min_volume=0.4
+                    min_volume=0.4,
                 )
             ),
         )
@@ -134,8 +150,8 @@ class BaseBot(ABC):
         self.rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
 
         self.user_idle = UserIdleProcessor(
-            callback=self._handle_user_idle,  
-            timeout=40.0
+            callback=self._handle_user_idle,
+            timeout=40.0,
         )
 
         self.transport: Optional[LiveKitTransport] = None
@@ -145,13 +161,13 @@ class BaseBot(ABC):
         self.is_idle = False
 
     async def setup_transport(self, url: str, token: str, room_name: str):
-       
+
         url = url.rstrip('/')
         if '/rtc' in url:
             logger.warning("URL contains '/rtc' - consider using base URL only (e.g., wss://your-server.com)")
-        
+
         self.transport = LiveKitTransport(url, token, self.config.bot_name, self.transport_params)
-        self.session_id = room_name  
+        self.session_id = room_name
 
         @self.transport.event_handler("on_participant_disconnected")
         async def on_participant_disconnected(transport, participant, reason=None):
@@ -163,7 +179,6 @@ class BaseBot(ABC):
 
         @self.transport.event_handler("on_participant_connected")
         async def on_participant_connected(transport, participant):
-            participant_id = participant.identity if participant else 'unknown'
             await transport.capture_participant_audio(participant.sid)
             await self._handle_first_participant()
 
@@ -172,23 +187,15 @@ class BaseBot(ABC):
             try:
                 message_str = data.decode("utf-8")
                 payload = json.loads(message_str)
-                
-                payload_type = payload.get("type", "unknown")
-                if payload_type == "session_control":
-                    action = payload.get("action", "unknown")
-
-               
 
                 if payload.get("type") == "session_control":
                     action = payload.get("action")
 
                     if action == "pause" and not self.is_idle:
                         await self.pause_session(trigger_source="ui")
-                        
                     elif action == "resume" and self.is_idle:
                         await self.resume_session(trigger_source="ui")
-                        
-                    return  
+                    return
 
                 text_message = payload.get("message", "")
                 user_id = participant.identity if participant else "unknown"
@@ -206,7 +213,6 @@ class BaseBot(ABC):
     def create_pipeline(self):
         if not self.transport:
             raise RuntimeError("Transport must be set up before creating pipeline")
-
 
         pipeline = Pipeline([
             self.rtvi,
@@ -230,7 +236,7 @@ class BaseBot(ABC):
         )
 
         self.runner = PipelineRunner()
-        
+
     async def start(self):
         if not self.runner or not self.task:
             raise RuntimeError("Bot not properly initialized. Call create_pipeline first.")
@@ -238,14 +244,11 @@ class BaseBot(ABC):
 
     async def cleanup(self):
         """Clean up resources and finalize session."""
-
         if getattr(self, "_summary_flushed", False):
             return
 
         try:
-           await self.flush_daily_summary(reason="cleanup")
-
-
+            await self.flush_daily_summary(reason="cleanup")
         except Exception as e:
             logger.error(f"Error during session finalization: {e}")
 
@@ -254,111 +257,106 @@ class BaseBot(ABC):
 
         if self.transport:
             try:
-                await self.transport.stop() # type: ignore
+                await self.transport.stop()  # type: ignore
             except Exception as e:
                 logger.warning(f"Transport cleanup error: {e}")
 
-    
-
     async def _handle_user_idle(self, processor: Optional[UserIdleProcessor] = None):
-      
+
         if self.is_idle:
             return
-        
+
         self.is_idle = True
-        
+
         try:
             await self._notify_frontend_state_change("idle")
-            
+
             pause_message = (
                 "It seems like you may have stepped away. I've paused our session "
                 "so you can continue right where you left off. Just say \"hello\" or "
                 "click play when you're back."
             )
-            
-            
+
             if self.task:
                 await self.task.queue_frames([
                     BotStartedSpeakingFrame(),
                     TextFrame(pause_message),
                     BotStoppedSpeakingFrame(),
                 ])
-            
+
             save_method: Optional[Callable] = getattr(self, 'save_session_data', None)
             if callable(save_method):
                 save_method()
-            
-            
-        except Exception as e:
+
+        except Exception:
             self.is_idle = False
-    
+
     async def pause_session(self, trigger_source: str = "idle"):
         if self.is_idle:
             return
-        
+
         self.is_idle = True
         self.pause_trigger_source = trigger_source
-        
+
         try:
             if hasattr(self.user_idle, 'stop'):
-                self.user_idle.stop()  # type: ignore # Stop idle timer
-            
+                self.user_idle.stop()  # type: ignore
+
             if self.task:
                 await self.task.queue_frames([StartInterruptionFrame()])
-            
+
             await self._notify_frontend_state_change("idle")
-            
+
             if trigger_source == "idle":
                 pause_message = (
                     "It seems like you may have stepped away. I've paused our session "
                     "so you can continue right where you left off. Just say \"hello\" or "
                     "click play when you're back."
                 )
-                
+
                 if self.task:
                     await self.task.queue_frames([
                         BotStartedSpeakingFrame(),
                         TextFrame(pause_message),
                         BotStoppedSpeakingFrame(),
                     ])
-            
+
             save_method = getattr(self, 'save_session_data', None)
             if callable(save_method):
                 save_method()
-                
-            
+
         except Exception as e:
             logger.error(f"Error during pause: {e}")
             self.is_idle = False
             self.pause_trigger_source = None
 
     async def resume_session(self, trigger_source: str = "voice"):
-        
+
         if not self.is_idle:
             logger.debug("Session is not idle, ignoring resume request")
             return
-        
+
         if self.pause_trigger_source == "ui" and trigger_source != "ui":
             logger.warning(
                 "UI-paused session attempted voice resume",
-                extra={"attempted_source": trigger_source}
+                extra={"attempted_source": trigger_source},
             )
             return
-            
+
         logger.info(
             "Session resumed",
-            extra={"session_id": self.session_id, "trigger_source": trigger_source}
+            extra={"session_id": self.session_id, "trigger_source": trigger_source},
         )
-        
+
         self.is_idle = False
         self.pause_trigger_source = None
-        
+
         try:
             if hasattr(self.user_idle, 'start'):
-                self.user_idle.start()  # type: ignore # Restart idle timer
-            
+                self.user_idle.start()  # type: ignore
+
             await self._notify_frontend_state_change("active")
-            
+
             if trigger_source == "voice":
                 welcome_back = "Welcome back! Let's continue."
                 if self.task:
@@ -367,18 +365,17 @@ class BaseBot(ABC):
                         TextFrame(welcome_back),
                         BotStoppedSpeakingFrame(),
                     ])
-                
+
             logger.info("Session resumed")
-            
+
         except Exception as e:
             logger.error(f"Error during resume: {e}")
             self.is_idle = True
 
     async def _notify_frontend_state_change(self, state: str):
         try:
-            
             room = self.transport._client._room  # type: ignore
-            
+
             if not room or not hasattr(room, 'local_participant'):
                 logger.warning("LiveKit room not accessible yet")
                 return
@@ -388,17 +385,12 @@ class BaseBot(ABC):
                 "session_id": self.session_id,
                 "state": state,
             }).encode("utf-8")
-            
-            # ✅ Use the native LiveKit publish_data method
+
             await room.local_participant.publish_data(payload, reliable=True)  # type: ignore
-            
             logger.info("Session state sent via LiveKit", extra={"state": state})
 
         except AttributeError as e:
             logger.error(f"LiveKit room attribute error: {e}")
-            if hasattr(self.transport, '_client'):  # type: ignore
-                client = self.transport._client  # type: ignore
-                logger.debug(f"Transport client attributes: {dir(client)}")
         except Exception:
             logger.exception("Failed to send session state")
 
@@ -423,7 +415,7 @@ class BaseBot(ABC):
         return " ".join(texts).strip()
 
     async def _get_existing_daily_summary(self):
-       
+
         result = (
             supabase
             .table("therapy_sessions")
@@ -438,56 +430,59 @@ class BaseBot(ABC):
             return None
 
         row = cast(dict[str, Any], result.data[0])
-        
+
         title = row.get("title")
         summary = row.get("summary")
         intensity = row.get("session_intensity")
-        
-    
+
         if not title or not summary or intensity is None:
             logger.info(
                 "Found incomplete daily summary row - will regenerate",
                 extra={
                     "has_title": bool(title),
                     "has_summary": bool(summary),
-                    "has_intensity": intensity is not None
-                }
+                    "has_intensity": intensity is not None,
+                },
             )
             return None
-        
+
         return (title, summary, intensity)
 
-
     async def _generate_safe_summary(self):
-       
+
         existing = await self._get_existing_daily_summary()
         user_text = self._extract_user_text()
 
-        if len(user_text) < 10 and existing:
-            return existing
+        if len(user_text) < 10:
+            return existing or (
+                "Daily Emotional Reflection",
+                "Today's check-in was brief. Emotional reflection will continue later.",
+                3,
+            )
 
         try:
             if existing:
                 existing_title, existing_summary, existing_intensity = existing
 
                 prompt = (
-                        "You are refining a daily therapy summary.\n\n"
-                        "Existing summary:\n"
-                        f"Title: {existing_title}\n"
-                        f"Summary: {existing_summary}\n"
-                        f"Intensity: {existing_intensity}\n\n"
-                        "Based on the NEW conversation content below, refine or extend the summary.\n"
-                        "Do NOT contradict the existing summary.\n"
-                        "If no meaningful new information exists, return the existing summary unchanged.\n\n"
-                        "Respond ONLY in JSON:\n"
-                        '{ "title": "...", "summary": "...", "session_intensity": number }'
-                    )
-            else:
+                    "You are refining a daily therapy summary.\n\n"
+                    "Existing summary:\n"
+                    f"Title: {existing_title}\n"
+                    f"Summary: {existing_summary}\n"
+                    f"Intensity: {existing_intensity}\n\n"
+                    "Based on the NEW conversation content below, refine or extend the summary.\n"
+                    "Do NOT contradict the existing summary.\n"
+                    "If no meaningful new information exists, return the existing summary unchanged.\n"
+                    "Write from the user's perspective, using 'you' to describe their experience.\n\n"
+                    "Respond ONLY in JSON:\n"
+                    '{ "title": "...", "summary": "...", "session_intensity": number }'
+                )
+                else:
                     prompt = (
-                        "Summarize today's therapy interaction in a neutral, empathetic way.\n"
-                        "Write in first-person plural using 'we' to reflect the collaborative nature of therapy.\n"
-                        "Examples: 'We explored feelings of...', 'We discussed challenges with...', 'We reflected on...'\n"
-                        "Focus on what was discussed, explored, or worked through together.\n\n"
+                        "Summarize today's therapy interaction from the user's perspective.\n"
+                        "Use second-person ('you') to help them reflect on their own experience.\n"
+                        "Examples: 'You explored feelings of...', 'You discussed challenges with...', 'You reflected on...'\n"
+                        "Focus on what they shared, discovered, or worked through.\n\n"
                         "Then generate:\n"
                         "- a short session title (3–6 words, neutral, no advice)\n"
                         "- ONE emotional intensity score (1–10) based on this scale:\n"
@@ -505,7 +500,6 @@ class BaseBot(ABC):
                         "Respond ONLY in JSON:\n"
                         '{ "title": "...", "summary": "...", "session_intensity": number }'
                     )
-
             messages = cast(
                 list[ChatCompletionMessageParam],
                 [
@@ -540,7 +534,6 @@ class BaseBot(ABC):
             title = str(result.get("title", "")).strip() or "Daily Emotional Reflection"
             summary = str(result.get("summary", "")).strip()
             intensity = int(result.get("session_intensity", 3))
-
             intensity = max(1, min(10, intensity))
 
             if not summary:
@@ -550,7 +543,7 @@ class BaseBot(ABC):
 
         except Exception as e:
             logger.error(f"Summary generation failed: {e}")
-            
+
             if existing:
                 return existing
 
@@ -559,7 +552,6 @@ class BaseBot(ABC):
                 "User checked in today. Emotional reflection will continue later.",
                 3,
             )
-
 
     async def flush_daily_summary(self, reason: str):
         try:
@@ -571,7 +563,6 @@ class BaseBot(ABC):
             title, summary, intensity = await self._generate_safe_summary()
 
             if not summary or not title or intensity is None:
-                
                 title = title or "Daily Emotional Reflection"
                 summary = summary or (
                     "Today's check-in was brief. Emotional reflection will continue later."
@@ -587,65 +578,54 @@ class BaseBot(ABC):
             self._summary_flushed = True
 
         except Exception:
-            logger.exception(
-                "Session end failed; summary NOT flushed — will retry later"
-            )
-
+            logger.exception("Session end failed; summary NOT flushed — will retry later")
 
     async def _send_session_end(self, *, title: str, summary: str, intensity: int):
-        
+
         if not getattr(self, "user_id", None):
             return False
 
-        backend_url = os.getenv("BACKEND_API_URL", "http://localhost:8080")
+        backend_url = os.getenv("BACKEND_API_URL")
         endpoint = f"{backend_url}/session/end"
-        
+
         payload = {
             "user_id": self.user_id,
             "title": title,
             "summary": summary,
             "session_intensity": intensity,
         }
-        
+
         logger.info(f"📤 Sending session end to: {endpoint}")
         logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
 
         try:
-            headers = {
-                "Content-Type": "application/json"
-            }
-
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(endpoint, json=payload, headers=headers)
-
+                resp = await client.post(
+                    endpoint,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                )
                 resp.raise_for_status()
-                
             return True
 
-        except httpx.HTTPStatusError as e:
-            
+        except httpx.HTTPStatusError:
             return False
-
-        except httpx.ConnectError as e:
+        except httpx.ConnectError:
             return False
-
-        except Exception as e:
+        except Exception:
             return False
-        
 
     async def _handle_first_participant(self):
-
+        # No TTS warmup needed — Google TTS is a managed API, no cold start
         if not self.task:
             logger.warning("⏳ Pipeline not ready yet - waiting 1 second...")
             await asyncio.sleep(1.0)
-            
-            # Check again after waiting
             if not self.task:
                 logger.error("❌ Cannot send greeting: pipeline task is still not ready")
                 return
-        
+
         greeting = "Hello there! I'm here to listen whenever you're ready to share."
-        
+
         try:
             await self.task.queue_frames([
                 BotStartedSpeakingFrame(),
