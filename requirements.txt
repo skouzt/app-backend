@@ -10,7 +10,7 @@ livekit-api==1.0.7
 livekit-protocol==1.1.1
 
 # Pipecat AI pipeline (NO whisper, NO torch)
-pipecat-ai[openai,silero,google]==0.0.95
+pipecat-ai[openai,silero,google,deepgram]==0.0.95
 
 # LLM Providers
 openai==1.74.0

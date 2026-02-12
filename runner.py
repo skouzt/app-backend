@@ -2,6 +2,13 @@
 
 from dotenv import load_dotenv
 load_dotenv()  
+
+import sys
+from loguru import logger
+
+
+
+
 import argparse
 import asyncio
 import os
