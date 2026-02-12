@@ -6,7 +6,9 @@ load_dotenv()
 import sys
 from loguru import logger
 
-
+# Suppress pipecat debug logs
+logger.remove()
+logger.add(sys.stderr, level="WARNING")
 
 
 import argparse
