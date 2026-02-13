@@ -31,16 +31,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-# Server configuration
 server_config = ServerConfig()
 
-# Check for required LiveKit env vars
 if not server_config.livekit_api_key or not server_config.livekit_api_secret:
     logger.error("LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be set in environment")
     raise ValueError("Missing LiveKit API credentials")
 
-# Runtime state
-bot_procs: Dict[int, tuple] = {}  # Track bot processes: {pid: (process, room_name, token)}
+bot_procs: Dict[int, tuple] = {}  
 
 def _safe_room_ref(room_name: str) -> str:
     """Create a safe reference for room names in logs."""
@@ -60,11 +57,10 @@ class SessionEndRequest(BaseModel):
     session_intensity: int
     
 
-# Configure loguru
 logger.remove()
 logger.add(
     sys.stderr,
-    level="INFO",  # ⭐ Changed from DEBUG to INFO for production
+    level="INFO", 
     format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | "
     "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
     enqueue=True,
@@ -75,9 +71,7 @@ logger.add(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    FastAPI lifespan manager. Removed Daily.co session, kept cleanup task.
-    """
+
     cleanup_task = asyncio.create_task(cleanup_finished_processes())
     try:
         yield
@@ -90,10 +84,7 @@ async def lifespan(app: FastAPI):
 
 
 async def cleanup_finished_processes() -> None:
-    """
-    Background task to clean up finished bot processes.
-    For LiveKit, rooms auto-expire, so we just clean up process tracking.
-    """
+   
     while True:
         try:
             for pid in list(bot_procs.keys()):
@@ -105,16 +96,13 @@ async def cleanup_finished_processes() -> None:
                     # No need to delete LiveKit rooms - they auto-expire
                     del bot_procs[pid]
         except Exception as e:
-            # ✅ SAFE: Log exception type only
             logger.error(f"Error during cleanup: {type(e).__name__}")
         await asyncio.sleep(5)
 
 
-# Create the FastAPI app
 app: FastAPI = FastAPI(lifespan=lifespan)
 
 
-#subscription
 app.include_router(user_subscription_router, prefix="/api/v1")
 
 app.include_router(billing_router, prefix="/api/v1")
@@ -129,7 +117,7 @@ def debug_routes():
                 "methods": route.methods
             })
     return routes
-# Configure CORS
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -140,12 +128,8 @@ app.add_middleware(
 
 
 async def create_livekit_token(room_name: str, identity: str) -> tuple[str, str, str]:
-    """
-    Create a LiveKit room token for bot and user.
-    Returns: (room_name, bot_token, user_token)
-    """
+  
     try:
-        # Bot token (can publish/subscribe)
         bot_token = api.AccessToken(
             api_key=server_config.livekit_api_key,
             api_secret=server_config.livekit_api_secret,
@@ -163,7 +147,6 @@ async def create_livekit_token(room_name: str, identity: str) -> tuple[str, str,
             )
         )
 
-        # User token (can publish/subscribe)
         user_token = api.AccessToken(
             api_key=server_config.livekit_api_key,
             api_secret=server_config.livekit_api_secret,
@@ -183,7 +166,6 @@ async def create_livekit_token(room_name: str, identity: str) -> tuple[str, str,
         return room_name, bot_token.to_jwt(), user_token.to_jwt()
 
     except Exception as e:
-        # ✅ SAFE: Log exception type only, not identity details
         logger.error(f"Failed to create LiveKit token: {type(e).__name__}")
         raise HTTPException(status_code=500, detail="Token generation failed")
 
@@ -196,8 +178,6 @@ def parse_server_args():
 
     global bot_args
 
-    # ✅ FIX: Only parse args if main.py is being run directly
-    # When uvicorn imports main.py, __name__ is 'main', not '__main__'
     if __name__ != '__main__':
         bot_args = []
         logger.info("Running via uvicorn - no CLI args parsed")
@@ -221,19 +201,15 @@ def parse_server_args():
     bot_args = remaining_args
     logger.info(f"Bot args: {bot_args}")
 
-# ✅ STEP 4: Call parse function
 parse_server_args()
 
-# In main.py
 
 async def start_bot_process(room_name: str, token: str, user_id: str) -> int:
-    """Start a bot subprocess with LiveKit credentials"""
-    # Check room capacity
+   
     num_bots_in_room = sum(
         1 for proc, name, _ in bot_procs.values() if name == room_name and proc.poll() is None
     )
     if num_bots_in_room >= server_config.max_bots_per_room:
-        # ✅ SAFE: Log with anonymized room reference
         room_ref = _safe_room_ref(room_name)
         logger.warning(f"Room {room_ref} at capacity ({server_config.max_bots_per_room} bots)")
         raise HTTPException(
@@ -245,7 +221,6 @@ async def start_bot_process(room_name: str, token: str, user_id: str) -> int:
         server_dir = os.path.dirname(os.path.abspath(__file__))
         run_helpers_path = os.path.join(server_dir, "runner.py")
 
-        # Build command with LiveKit parameters
         cmd = [
             sys.executable,
             run_helpers_path,
@@ -260,25 +235,22 @@ async def start_bot_process(room_name: str, token: str, user_id: str) -> int:
 
         env = os.environ.copy()
         env["PYTHONPATH"] = server_dir
-        env["BOT_USER_ID"] = user_id  # ⭐ Add this line
+        env["BOT_USER_ID"] = user_id  
 
         proc = subprocess.Popen(cmd, bufsize=1, cwd=server_dir, env=env)
         bot_procs[proc.pid] = (proc, room_name, token)
         
-        # ✅ SAFE: Log with anonymized references
         room_ref = _safe_room_ref(room_name)
         logger.info(f"Bot process started (pid: {proc.pid}) for {room_ref}")
         
         return proc.pid
     except Exception as e:
-        # ✅ SAFE: Log exception type only
         logger.error(f"Bot startup failed: {type(e).__name__}")
         raise HTTPException(status_code=500, detail="Failed to start bot process")
 
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
     return {
         "status": "ok",
         "service": "Aletheia Therapy Bot",
@@ -289,15 +261,12 @@ async def health_check():
 
 @app.get("/")
 async def start_agent(request: Request):
-    """
-    Legacy endpoint - redirects to LiveKit connect flow.
-    """
+    
     return RedirectResponse("/connect-livekit")
 
 
 @app.post("/connect")
 async def rtvi_connect(request: Request) -> Dict[str, Any]:
-    """DEPRECATED: Daily.co endpoint. Use /connect-livekit instead."""
     raise HTTPException(
         status_code=410,
         detail="Daily.co is deprecated. Use POST /connect-livekit instead.",
@@ -306,23 +275,17 @@ async def rtvi_connect(request: Request) -> Dict[str, Any]:
 @app.post("/connect-livekit")
 async def connect_livekit(
     request: Request,
-    user_id: str = Depends(get_current_user_id)  # ⭐ Force JWT verification
+    user_id: str = Depends(get_current_user_id)  
 ) -> Dict[str, Any]:
-    """
-    Create LiveKit room and return connection credentials.
-    Requires valid Clerk JWT.
-    """
+   
     try:
         data = await request.json()
         room_name = data.get("room", f"therapy-{uuid.uuid4().hex[:8]}")
         
-        # ⭐ Use AUTHENTICATED user_id from JWT, NOT from request body
         identity = user_id
 
-        # Create tokens
         room, bot_token, user_token = await create_livekit_token(room_name, identity)
 
-        # Start bot process
         pid = await start_bot_process(room_name, bot_token, identity)
 
         return {
@@ -336,15 +299,12 @@ async def connect_livekit(
         }
 
     except Exception as e:
-        # ✅ SAFE: Log exception type only
         logger.error(f"LiveKit connect failed: {type(e).__name__}")
         raise HTTPException(status_code=500, detail="Connection failed")
 
 @app.get("/get-livekit-token")
 async def get_livekit_token_endpoint(room: str = "therapy-room", identity: str = "user"):
-    """
-    Generate a LiveKit JWT token for a user to join a room.
-    """
+    
     try:
         room_name, _, user_token = await create_livekit_token(room, identity)
         return JSONResponse(
@@ -357,16 +317,13 @@ async def get_livekit_token_endpoint(room: str = "therapy-room", identity: str =
         )
 
     except Exception as e:
-        # ✅ SAFE: Log exception type only
         logger.error(f"LiveKit token generation failed: {type(e).__name__}")
         raise HTTPException(status_code=500, detail="Token generation failed")
 
 
 @app.get("/status/{pid}")
 def get_status(pid: int):
-    """
-    Get the status of a specific bot process.
-    """
+   
     proc_tuple = bot_procs.get(pid)
     if not proc_tuple:
         raise HTTPException(status_code=404, detail=f"Bot with process id: {pid} not found")
@@ -379,12 +336,7 @@ def get_status(pid: int):
 async def start_session(
     user_id: str = Depends(get_current_user_id),
 ):
-    # ✅ Use UTC consistently
     today_utc = datetime.now(timezone.utc).date().isoformat()
-    
-    # ✅ Don't create incomplete rows
-    # Remove the upsert entirely
-    
     return {
         "status": "ok",
         "date": today_utc,
@@ -416,7 +368,7 @@ if __name__ == "__main__":
 
     logger.info("Starting FastAPI server with LiveKit")
 
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", 8080)) 
 
     uvicorn.run(
         "main:app",
