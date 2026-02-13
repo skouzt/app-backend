@@ -3,9 +3,13 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import jwt
 import requests
 import os
-from dotenv import load_dotenv
+if not os.getenv("_ENV_LOADED"):
+    from dotenv import load_dotenv, find_dotenv
+    env_path = find_dotenv()
+    if env_path:
+        load_dotenv(env_path)
 
-load_dotenv()
+
 security = HTTPBearer()
 
 CLERK_JWT_ISSUER = os.getenv("CLERK_JWT_ISSUER")

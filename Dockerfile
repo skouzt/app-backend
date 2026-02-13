@@ -69,11 +69,13 @@ COPY schemas /app/schemas
 COPY prompts /app/prompts
 COPY task /app/task
 COPY api /app/api
+COPY .env /app/.env
 COPY runner.py /app/runner.py
 COPY main.py /app/main.py
 
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
+EXPOSE 8080
 
 CMD ["python", "main.py"]
