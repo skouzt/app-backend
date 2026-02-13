@@ -87,7 +87,7 @@ class BaseBot(ABC):
 
         self.tts = GoogleTTSService(
             credentials=google_credentials_json,  # Full JSON string, not API key
-            voice_id=getattr(config, "google_tts_voice", "en-US-Neural2-F"),
+            voice_id=getattr(config, "google_tts_voice", "en-US-Journey-F"),
             params=GoogleTTSService.InputParams(
                 language="en-US",
                 speaking_rate=getattr(config, "google_tts_speed", 1.0),
@@ -449,7 +449,6 @@ class BaseBot(ABC):
         return (title, summary, intensity)
 
     async def _generate_safe_summary(self):
-
         existing = await self._get_existing_daily_summary()
         user_text = self._extract_user_text()
 
@@ -477,29 +476,30 @@ class BaseBot(ABC):
                     "Respond ONLY in JSON:\n"
                     '{ "title": "...", "summary": "...", "session_intensity": number }'
                 )
-                else:
-                    prompt = (
-                        "Summarize today's therapy interaction from the user's perspective.\n"
-                        "Use second-person ('you') to help them reflect on their own experience.\n"
-                        "Examples: 'You explored feelings of...', 'You discussed challenges with...', 'You reflected on...'\n"
-                        "Focus on what they shared, discovered, or worked through.\n\n"
-                        "Then generate:\n"
-                        "- a short session title (3–6 words, neutral, no advice)\n"
-                        "- ONE emotional intensity score (1–10) based on this scale:\n"
-                        "  1 = Too much (crisis level, overwhelming distress)\n"
-                        "  2 = Anxious (high anxiety, very worried)\n"
-                        "  3 = Overwhelmed (struggling to cope)\n"
-                        "  4 = Strained (under significant pressure)\n"
-                        "  5 = Heavy (burdened, weighed down)\n"
-                        "  6 = Uneasy (uncomfortable, somewhat troubled)\n"
-                        "  7 = Neutral (neither good nor bad, stable)\n"
-                        "  8 = Light (mostly positive, manageable)\n"
-                        "  9 = Okay (doing well, comfortable)\n"
-                        "  10 = At ease (calm, peaceful, grounded)\n\n"
-                        "Choose the intensity that best matches the overall emotional tone of the session.\n\n"
-                        "Respond ONLY in JSON:\n"
-                        '{ "title": "...", "summary": "...", "session_intensity": number }'
-                    )
+            else:
+                prompt = (
+                    "Summarize today's therapy interaction from the user's perspective.\n"
+                    "Use second-person ('you') to help them reflect on their own experience.\n"
+                    "Examples: 'You explored feelings of...', 'You discussed challenges with...', 'You reflected on...'\n"
+                    "Focus on what they shared, discovered, or worked through.\n\n"
+                    "Then generate:\n"
+                    "- a short session title (3–6 words, neutral, no advice)\n"
+                    "- ONE emotional intensity score (1–10) based on this scale:\n"
+                    "  1 = Too much (crisis level, overwhelming distress)\n"
+                    "  2 = Anxious (high anxiety, very worried)\n"
+                    "  3 = Overwhelmed (struggling to cope)\n"
+                    "  4 = Strained (under significant pressure)\n"
+                    "  5 = Heavy (burdened, weighed down)\n"
+                    "  6 = Uneasy (uncomfortable, somewhat troubled)\n"
+                    "  7 = Neutral (neither good nor bad, stable)\n"
+                    "  8 = Light (mostly positive, manageable)\n"
+                    "  9 = Okay (doing well, comfortable)\n"
+                    "  10 = At ease (calm, peaceful, grounded)\n\n"
+                    "Choose the intensity that best matches the overall emotional tone of the session.\n\n"
+                    "Respond ONLY in JSON:\n"
+                    '{ "title": "...", "summary": "...", "session_intensity": number }'
+                )
+
             messages = cast(
                 list[ChatCompletionMessageParam],
                 [
@@ -552,6 +552,8 @@ class BaseBot(ABC):
                 "User checked in today. Emotional reflection will continue later.",
                 3,
             )
+
+
 
     async def flush_daily_summary(self, reason: str):
         try:
