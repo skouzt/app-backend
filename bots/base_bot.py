@@ -19,12 +19,10 @@ from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.transports.livekit.transport import LiveKitTransport, LiveKitParams
 
-# ── STT: Deepgram ──────────────────────────────────────────────────────────────
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from deepgram import LiveOptions
 
-# ── TTS: Google ────────────────────────────────────────────────────────────────
-from pipecat.services.google.tts import GoogleTTSService
+from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import DataFrame
@@ -61,7 +59,6 @@ class BaseBot(ABC):
         self._summary_flushed = False
         self.pause_trigger_source: Optional[str] = None
 
-        # ── STT: Deepgram ──────────────────────────────────────────────────────
         deepgram_api_key = os.getenv("DEEPGRAM_API_KEY")
         if not deepgram_api_key:
             raise ValueError("DEEPGRAM_API_KEY must be set in environment")
@@ -80,21 +77,23 @@ class BaseBot(ABC):
             ),
         )
 
-        # ── TTS: Google ────────────────────────────────────────────────────────
-        google_credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
-        if not google_credentials_json:
-            raise ValueError("GOOGLE_CREDENTIALS_JSON must be set in environment (service account JSON)")
+        elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY")
+        if not elevenlabs_api_key:
+            raise ValueError("ELEVENLABS_API_KEY must be set in environment")
 
-        self.tts = GoogleTTSService(
-            credentials=google_credentials_json,  # Full JSON string, not API key
-            voice_id=getattr(config, "google_tts_voice", "en-US-Journey-F"),
-            params=GoogleTTSService.InputParams(
-                language="en-US",
-                speaking_rate=getattr(config, "google_tts_speed", 1.0),
+        self.tts = ElevenLabsTTSService(
+            api_key=elevenlabs_api_key,
+            voice_id=getattr(config, "elevenlabs_voice", "Elise"), 
+            model_id="eleven_flash_v2_5", 
+            settings=ElevenLabsTTSService.InputParams(
+                stability=0.5,
+                similarity_boost=0.75,
+                style=0.0,
+                use_speaker_boost=True,
+                speed=1.0,
             ),
         )
 
-        # ── LLM ───────────────────────────────────────────────────────────────
         match config.llm_provider:
             case "deepseek":
                 if not config.deepseek_api_key:
