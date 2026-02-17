@@ -83,7 +83,7 @@ class BaseBot(ABC):
 
         self.tts = ElevenLabsTTSService(
             api_key=elevenlabs_api_key,
-            voice_id=getattr(config, "elevenlabs_voice", "Elise"), 
+            voice_id=getattr(config, "elevenlabs_voice", "EST9Ui6982FZPSi7gCHi"), 
             model_id="eleven_flash_v2_5", 
             settings=ElevenLabsTTSService.InputParams(
                 stability=0.5,
