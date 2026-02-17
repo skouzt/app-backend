@@ -178,7 +178,7 @@ class BaseBot(ABC):
 
         @self.transport.event_handler("on_participant_connected")
         async def on_participant_connected(transport, participant):
-            await transport.capture_participant_audio(participant.sid)
+            #await transport.capture_participant_audio(participant.sid)
             await self._handle_first_participant()
 
         @self.transport.event_handler("on_data_received")
