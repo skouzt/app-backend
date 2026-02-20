@@ -16,6 +16,8 @@ pipecat-ai[openai,silero,google,deepgram,elevenlabs]==0.0.95
 openai==1.74.0
 google-generativeai==0.8.0
 
+elevenlabs
+
 # Database & Auth
 supabase==2.13.0
 python-jose==3.3.0
