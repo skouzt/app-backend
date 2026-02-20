@@ -24,7 +24,8 @@ from pipecat.services.deepgram.stt import DeepgramSTTService
 from deepgram import LiveOptions
 
 # ── TTS: Google ────────────────────────────────────────────────────────────────
-from pipecat.services.google.tts import GoogleTTSService
+from pipecat.services.deepgram.tts import DeepgramTTSService
+
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import DataFrame
@@ -81,17 +82,14 @@ class BaseBot(ABC):
         )
 
         # ── TTS: Google ────────────────────────────────────────────────────────
-        google_credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
-        if not google_credentials_json:
-            raise ValueError("GOOGLE_CREDENTIALS_JSON must be set in environment (service account JSON)")
+        deepgram_api_key = os.getenv("DASHSCOPE_API_KEY")
+        if not deepgram_api_key:
+            raise ValueError("DASHSCOPE_API_KEY must be set in environment")
 
-        self.tts = GoogleTTSService(
-            credentials=google_credentials_json,  # Full JSON string, not API key
-            voice_id=getattr(config, "google_tts_voice", "en-US-Journey-F"),
-            params=GoogleTTSService.InputParams(
-                language="en-US",
-                speaking_rate=getattr(config, "google_tts_speed", 1.0),
-            ),
+
+        self.tts = DeepgramTTSService(
+            api_key=deepgram_api_key,
+            voice="aura-2-thalia-en",  # Your chosen voice
         )
 
         match config.llm_provider:
