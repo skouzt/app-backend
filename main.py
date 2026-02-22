@@ -22,6 +22,7 @@ from core.config import settings  # Add this import
 from config.server import ServerConfig
 from datetime import date
 from api.v1.users.subscription import router as user_subscription_router
+from api.v1.users.profile import router as profile_router
 from api.v1.billing.gumroad import router as billing_router
 
 from fastapi.routing import APIRoute
@@ -104,7 +105,7 @@ app: FastAPI = FastAPI(lifespan=lifespan)
 
 
 app.include_router(user_subscription_router, prefix="/api/v1")
-
+app.include_router(profile_router, prefix="/api/v1/users")
 app.include_router(billing_router, prefix="/api/v1")
 
 @app.get("/debug/routes")
