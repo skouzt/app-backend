@@ -1,7 +1,7 @@
-# api/v1/users/profile.py
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+import traceback
 from core.security import get_current_user_id
 from db.supabase import supabase
 
@@ -19,48 +19,41 @@ class ProfileUpdateRequest(BaseModel):
 
 @router.get("/profile", response_model=ProfileResponse)
 async def get_profile(user_id: str = Depends(get_current_user_id)):
-    """
-    Get user profile info from user_info table.
-    Returns empty defaults if no profile exists yet.
-    """
     try:
         result = supabase.table("user_info") \
             .select("name, age, gender") \
             .eq("user_id", user_id) \
-            .maybe_single() \
+            .limit(1) \
             .execute()
-        
-        if result.data:
+
+        if result.data and len(result.data) > 0:
+            row = result.data[0]
             return ProfileResponse(
-                name=result.data.get("name"),
-                age=result.data.get("age"),
-                gender=result.data.get("gender")
+                name=row.get("name"),
+                age=row.get("age"),
+                gender=row.get("gender")
             )
-        
-        # Return defaults if no profile exists
+
         return ProfileResponse()
-        
+
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to fetch profile: {str(e)}")
+
 
 @router.post("/profile")
 async def update_profile(
     payload: ProfileUpdateRequest,
     user_id: str = Depends(get_current_user_id)
 ):
-    """
-    Create or update user profile in user_info table.
-    """
     try:
-        # Check if profile exists
         existing = supabase.table("user_info") \
             .select("user_id") \
             .eq("user_id", user_id) \
-            .maybe_single() \
+            .limit(1) \
             .execute()
-        
-        if existing.data:
-            # Update existing
+
+        if existing.data and len(existing.data) > 0:
             supabase.table("user_info") \
                 .update({
                     "name": payload.name.strip(),
@@ -70,7 +63,6 @@ async def update_profile(
                 .eq("user_id", user_id) \
                 .execute()
         else:
-            # Insert new
             supabase.table("user_info") \
                 .insert({
                     "user_id": user_id,
@@ -79,8 +71,9 @@ async def update_profile(
                     "gender": payload.gender,
                 }) \
                 .execute()
-        
+
         return {"status": "success"}
-        
+
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to save profile: {str(e)}")
