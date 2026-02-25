@@ -23,6 +23,11 @@ from config.server import ServerConfig
 from datetime import date
 from api.v1.users.subscription import router as user_subscription_router
 from api.v1.users.profile import router as profile_router
+from api.v1.users.onboarding import router as onboarding_router
+from api.v1.users.onboarding_submit import router as onboarding_submit_router
+from api.v1.therapy.sessions import router as therapy_sessions_router
+
+
 from api.v1.billing.gumroad import router as billing_router
 
 from fastapi.routing import APIRoute
@@ -105,8 +110,13 @@ app: FastAPI = FastAPI(lifespan=lifespan)
 
 
 app.include_router(user_subscription_router, prefix="/api/v1")
+app.include_router(onboarding_router, prefix="/api/v1/users")
 app.include_router(profile_router, prefix="/api/v1/users")
+app.include_router(therapy_sessions_router, prefix="/api/v1/therapy")
+
 app.include_router(billing_router, prefix="/api/v1")
+app.include_router(onboarding_submit_router, prefix="/api/v1/users")
+
 
 @app.get("/debug/routes")
 def debug_routes():
@@ -174,7 +184,6 @@ async def create_livekit_token(room_name: str, identity: str) -> tuple[str, str,
 bot_args = []
 
 def parse_server_args():
-    """Parse server-specific arguments ONLY when main.py is run directly"""
     import argparse
 
     global bot_args

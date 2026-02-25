@@ -89,7 +89,8 @@ class BaseBot(ABC):
 
         self.tts = DeepgramTTSService(
             api_key=deepgram_api_key,
-            voice="aura-2-thalia-en",  # Your chosen voice
+            voice="aura-2-thalia-en", 
+            speed=0.95,
         )
 
         match config.llm_provider:
