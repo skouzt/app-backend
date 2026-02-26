@@ -81,7 +81,6 @@ class BaseBot(ABC):
             ),
         )
 
-        # ── TTS: Google ────────────────────────────────────────────────────────
         deepgram_api_key = os.getenv("DASHSCOPE_API_KEY")
         if not deepgram_api_key:
             raise ValueError("DASHSCOPE_API_KEY must be set in environment")
