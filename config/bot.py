@@ -22,7 +22,7 @@ class DailyConfig(TypedDict):
 
 
 BotType = Literal["simple", "flow", "therapy"]
-LLMProvider = Literal["deepseek", "google", "openai"]
+LLMProvider = Literal["deepseek", "google", "openai","openrouter"]
 TTSProvider = Literal["kokoro", "kokoro_fastapi"]  
 
 
@@ -37,6 +37,8 @@ class BotConfig:
         
         # LLM API key validation based on provider
         llm_provider_check = os.getenv("LLM_PROVIDER", "deepseek").lower()
+        if llm_provider_check == "openrouter" and not os.getenv("OPENROUTER_API_KEY"):
+            raise ValueError("OPENROUTER_API_KEY is required when using OpenRouter")
         if llm_provider_check == "deepseek" and not os.getenv("DEEPSEEK_API_KEY"):
             raise ValueError("DEEPSEEK_API_KEY is required when using DeepSeek")
         if llm_provider_check == "google" and not os.getenv("GOOGLE_API_KEY"):
@@ -79,6 +81,10 @@ class BotConfig:
     # API keys (omitted for brevity, assume they are correct)
     ###########################################################################
 
+    
+    @property
+    def openrouter_api_key(self) -> str:
+        return os.getenv("OPENROUTER_API_KEY", "")
     @property
     def deepseek_api_key(self) -> str:
         return os.getenv("DEEPSEEK_API_KEY", "")
@@ -123,7 +129,7 @@ class BotConfig:
     @llm_provider.setter
     def llm_provider(self, value: str):
         value = value.lower()
-        if value not in ("deepseek", "google", "openai"):
+        if value not in ("deepseek", "google", "openai","openrouter"):
             raise ValueError(f"Invalid LLM provider: {value}")
 
         os.environ["LLM_PROVIDER"] = value
@@ -190,6 +196,15 @@ class BotConfig:
     def openai_params(self, value: OpenAILLMService.InputParams):
         os.environ["OPENAI_TEMPERATURE"] = str(value.temperature)
         os.environ["OPENAI_MAX_TOKENS"] = str(value.max_tokens)
+
+
+    @property
+    def openrouter_model(self) -> str:
+        return os.getenv("OPENROUTER_MODEL", "google/gemini-3-flash-preview")
+
+    @openrouter_model.setter
+    def openrouter_model(self, value: str):
+        os.environ["OPENROUTER_MODEL"] = value
 
     # --- TTS Configuration (Kokoro) ---
 

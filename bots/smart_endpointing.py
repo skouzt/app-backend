@@ -28,8 +28,7 @@ from pipecat.processors.aggregators.llm_response import BaseLLMResponseAggregato
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContextFrame
 from pipecat.services.google.llm import GoogleLLMContext
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.sync.base_notifier import BaseNotifier
-
+from pipecat.utils.sync.base_notifier import BaseNotifier
 # ✅ Import Google GenAI types
 from google.genai import types
 

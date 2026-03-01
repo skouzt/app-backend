@@ -79,7 +79,7 @@ def cli() -> None:
 
     # Bot configuration
     parser.add_argument("-n", "--bot-name", type=str, help="Override BOT_NAME")
-    parser.add_argument("--llm-provider", type=str, choices=["deepseek", "google", "openai"])
+    parser.add_argument("--llm-provider", type=str, choices=["deepseek", "google", "openai","openrouter"])
     parser.add_argument("--deepseek-temperature", type=float)
     parser.add_argument("--kokoro-voice", type=str)
     parser.add_argument("--kokoro-speed", type=float)
