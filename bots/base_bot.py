@@ -1,5 +1,3 @@
-"""Base bot framework - LIVEKIT VERSION (ENHANCED IDLE WITH PAUSE/RESUME)."""
-
 import asyncio
 import json
 from abc import ABC, abstractmethod
@@ -24,8 +22,7 @@ from pipecat.services.deepgram.stt import DeepgramSTTService
 from deepgram import LiveOptions
 
 # ── TTS: Google ────────────────────────────────────────────────────────────────
-from pipecat.services.deepgram.tts import DeepgramTTSService
-
+from pipecat.services.inworld.tts import InworldTTSService
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import DataFrame
@@ -44,6 +41,7 @@ import httpx
 from db.supabase import supabase
 from .smart_endpointing import AssistantMemoryWriter
 from pipecat.processors.user_idle_processor import UserIdleProcessor
+from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor, RTVIObserver  
 from openai.types.chat import ChatCompletionMessageParam
 from loguru import logger
 
@@ -77,22 +75,32 @@ class BaseBot(ABC):
                 filler_words=False,
                 interim_results=True,
                 utterance_end_ms="1000",
-                vad_events=True,
             ),
         )
 
-        deepgram_api_key = os.getenv("DASHSCOPE_API_KEY")
-        if not deepgram_api_key:
-            raise ValueError("DASHSCOPE_API_KEY must be set in environment")
+        inworld_api_key = os.getenv("INWORLD_API_KEY")
+        if not inworld_api_key:
+            raise ValueError("INWORLD_API_KEY must be set in environment")
+        
 
 
-        self.tts = DeepgramTTSService(
-            api_key=deepgram_api_key,
-            voice="aura-2-thalia-en", 
+        self.tts = InworldTTSService(
+            api_key=inworld_api_key,
+            model="inworld-tts-1.5-mini",
+            voice="Claire",
             speed=0.95,
         )
 
         match config.llm_provider:
+            case "openrouter":
+                if not config.openrouter_api_key:
+                    raise ValueError("OpenRouter API key is required")
+                self.conversation_llm = OpenAILLMService(
+                    api_key=config.openrouter_api_key,
+                    model=config.openrouter_model,
+                    base_url="https://openrouter.ai/api/v1",
+                    params=config.openai_params,  
+                )
             case "deepseek":
                 if not config.deepseek_api_key:
                     raise ValueError("DeepSeek API key is required")
@@ -133,7 +141,6 @@ class BaseBot(ABC):
         self.transport_params = LiveKitParams(
             audio_out_enabled=True,
             audio_in_enabled=True,
-            vad_enabled=True,
             vad_analyzer=SileroVADAnalyzer(
                 params=VADParams(
                     confidence=0.7,
@@ -144,7 +151,6 @@ class BaseBot(ABC):
             ),
         )
 
-        self.rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
 
         self.user_idle = UserIdleProcessor(
             callback=self._handle_user_idle,
@@ -212,7 +218,6 @@ class BaseBot(ABC):
             raise RuntimeError("Transport must be set up before creating pipeline")
 
         pipeline = Pipeline([
-            self.rtvi,
             self.transport.input(),
             self.stt,
             self.context_aggregator.user(),
@@ -257,6 +262,7 @@ class BaseBot(ABC):
                 await self.transport.stop()  # type: ignore
             except Exception as e:
                 logger.warning(f"Transport cleanup error: {e}")
+
 
     async def _handle_user_idle(self, processor: Optional[UserIdleProcessor] = None):
 
@@ -505,17 +511,15 @@ class BaseBot(ABC):
                 ],
             )
 
-            client = AsyncOpenAI(
+            async with AsyncOpenAI(
                 api_key=self.config.deepseek_api_key,
                 base_url="https://api.deepseek.com/v1",
-            )
-
-            response = await client.chat.completions.create(
-                model=self.config.deepseek_model,
-                messages=messages,
-                temperature=0.3,
-            )
-
+            ) as client:
+                response = await client.chat.completions.create(
+                    model=self.config.deepseek_model,
+                    messages=messages,
+                    temperature=0.3,
+                )
             content = response.choices[0].message.content
             if not content:
                 raise ValueError("Empty LLM response")
