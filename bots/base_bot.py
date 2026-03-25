@@ -19,6 +19,7 @@ from pipecat.transports.livekit.transport import LiveKitTransport, LiveKitParams
 
 # ── STT: Deepgram ──────────────────────────────────────────────────────────────
 from pipecat.services.deepgram.stt import DeepgramSTTService
+from pipecat.services.deepgram.tts import DeepgramTTSService
 from deepgram import LiveOptions
 
 # ── TTS: Google ────────────────────────────────────────────────────────────────
@@ -44,6 +45,7 @@ from pipecat.processors.user_idle_processor import UserIdleProcessor
 from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor, RTVIObserver  
 from openai.types.chat import ChatCompletionMessageParam
 from loguru import logger
+import uuid as uuid_lib
 
 
 class LLMServiceProtocol(Protocol):
@@ -55,10 +57,12 @@ class BaseBot(ABC):
     def __init__(self, config, system_messages: Optional[List[ChatCompletionMessageParam]] = None):
         self.config = config
         self.user_id: str | None = None
-        self.session_id = None
+        self.session_start_time = None
+        self._session_start_task = None
         self.api_base_url = getattr(config, 'api_base_url', 'http://localhost:8000')
         self._summary_flushed = False
         self.pause_trigger_source: Optional[str] = None
+        backend_url = os.getenv("BACKEND_API_URL")
 
         # ── STT: Deepgram ──────────────────────────────────────────────────────
         deepgram_api_key = os.getenv("DEEPGRAM_API_KEY")
@@ -78,17 +82,14 @@ class BaseBot(ABC):
             ),
         )
 
-        inworld_api_key = os.getenv("INWORLD_API_KEY")
-        if not inworld_api_key:
-            raise ValueError("INWORLD_API_KEY must be set in environment")
-        
+        deepgram_api_key = os.getenv("DASHSCOPE_API_KEY")
+        if not deepgram_api_key:
+            raise ValueError("DASHSCOPE_API_KEY must be set in environment")
 
 
-        self.tts = InworldTTSService(
-            api_key=inworld_api_key,
-            model="inworld-tts-1.5-mini",
-            voice="Claire",
-            speed=0.95,
+        self.tts = DeepgramTTSService(
+            api_key=deepgram_api_key,
+            voice="aura-2-thalia-en",  
         )
 
         match config.llm_provider:
@@ -163,6 +164,8 @@ class BaseBot(ABC):
 
         self.is_idle = False
 
+    
+
     async def setup_transport(self, url: str, token: str, room_name: str):
 
         url = url.rstrip('/')
@@ -170,7 +173,9 @@ class BaseBot(ABC):
             logger.warning("URL contains '/rtc' - consider using base URL only (e.g., wss://your-server.com)")
 
         self.transport = LiveKitTransport(url, token, self.config.bot_name, self.transport_params)
-        self.session_id = room_name
+        self.room_id = room_name
+        self.session_id = str(uuid_lib.uuid4())
+        self.session_id_backend = self.session_id
 
         @self.transport.event_handler("on_participant_disconnected")
         async def on_participant_disconnected(transport, participant, reason=None):
@@ -180,10 +185,7 @@ class BaseBot(ABC):
             if self.task:
                 await self.task.cancel()
 
-        @self.transport.event_handler("on_participant_connected")
-        async def on_participant_connected(transport, participant):
-            await transport.capture_participant_audio(participant.sid)
-            await self._handle_first_participant()
+    
 
         @self.transport.event_handler("on_data_received")
         async def on_data_received(transport, data, participant):
@@ -242,6 +244,7 @@ class BaseBot(ABC):
     async def start(self):
         if not self.runner or not self.task:
             raise RuntimeError("Bot not properly initialized. Call create_pipeline first.")
+        await self._start_backend_session()
         await self.runner.run(self.task)
 
     async def cleanup(self):
@@ -583,52 +586,81 @@ class BaseBot(ABC):
         except Exception:
             logger.exception("Session end failed; summary NOT flushed — will retry later")
 
-    async def _send_session_end(self, *, title: str, summary: str, intensity: int):
+    async def _start_backend_session(self):
+        """Set start time and fire background notification — never blocks."""
+        self.session_start_time = datetime.utcnow()
+        await self._notify_backend_session_start()
 
-        if not getattr(self, "user_id", None):
-            return False
-
+    
+    async def _notify_backend_session_start(self):
         backend_url = os.getenv("BACKEND_API_URL")
-        endpoint = f"{backend_url}/session/end"
+        internal_secret = os.getenv("INTERNAL_API_SECRET")
+        
+        if not backend_url:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{backend_url}/session/start",
+                    json={"session_id": self.session_id_backend},
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-internal-secret": internal_secret,
+                        "x-user-id": self.user_id,
+                    },
+                )
+        except Exception as e:
+            logger.warning(f"Session start notification failed: {e}")
+
+    # ─────────────────────────────────────────────────────────────
+    # SESSION END
+    # ─────────────────────────────────────────────────────────────
+
+    async def _send_session_end(self, *, title: str, summary: str, intensity: int):
+        backend_url = os.getenv("BACKEND_API_URL")
+        
+        minutes = 0
+        if self.session_start_time:
+            minutes = int(
+                (datetime.utcnow() - self.session_start_time).total_seconds() / 60
+            )
 
         payload = {
+            "session_id": self.session_id_backend,  # always set from __init__
             "user_id": self.user_id,
+            "minutes": max(1, minutes),
             "title": title,
             "summary": summary,
             "session_intensity": intensity,
         }
 
-        logger.info(f"📤 Sending session end to: {endpoint}")
-        logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
-
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(
-                    endpoint,
+                    f"{backend_url}/session/end",
                     json=payload,
                     headers={"Content-Type": "application/json"},
                 )
                 resp.raise_for_status()
-            return True
+                logger.info("Session end recorded")
+                return True
+        except Exception as e:
+            logger.error(f"Session end failed: {e}")
+            return False
 
-        except httpx.HTTPStatusError:
-            return False
-        except httpx.ConnectError:
-            return False
-        except Exception:
-            return False
+    # ─────────────────────────────────────────────────────────────
+    # FIRST PARTICIPANT
+    # ─────────────────────────────────────────────────────────────
 
     async def _handle_first_participant(self):
-        # No TTS warmup needed — Google TTS is a managed API, no cold start
         if not self.task:
-            logger.warning("⏳ Pipeline not ready yet - waiting 1 second...")
+            logger.warning("Pipeline not ready — waiting 1s")
             await asyncio.sleep(1.0)
             if not self.task:
-                logger.error("❌ Cannot send greeting: pipeline task is still not ready")
+                logger.error("Pipeline still not ready — aborting greeting")
                 return
 
         greeting = "Hello there! I'm here to listen whenever you're ready to share."
-
         try:
             await self.task.queue_frames([
                 BotStartedSpeakingFrame(),
@@ -636,4 +668,4 @@ class BaseBot(ABC):
                 BotStoppedSpeakingFrame(),
             ])
         except Exception as e:
-            logger.error(f"❌ Failed to send greeting: {e}")
+            logger.error(f"Failed to send greeting: {e}")
