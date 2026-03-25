@@ -67,7 +67,6 @@ COPY db /app/db
 COPY services /app/services
 COPY schemas /app/schemas
 COPY prompts /app/prompts
-COPY task /app/task
 COPY api /app/api
 COPY runner.py /app/runner.py
 COPY main.py /app/main.py
