@@ -1,6 +1,9 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Dict
+from typing import Optional
 import time
 import traceback
 from core.security import get_current_user_id
@@ -25,13 +28,17 @@ def check_rate_limit(user_id: str, max_requests: int = 10, window_seconds: int =
     request_history[user_id] = user_requests
 
 
+
 class SessionRow(BaseModel):
     id: str
+    user_id: str
     created_at: str
-    date: str
-    title: str
-    summary: str
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    duration_minutes: Optional[int] = None  # <-- ADD THIS
     session_intensity: int
+    title: Optional[str] = None
+    summary: Optional[str] = None
 
 class JourneyPoint(BaseModel):
     date: str
@@ -45,6 +52,8 @@ class SessionsResponse(BaseModel):
 class JourneyResponse(BaseModel):
     journey: List[JourneyPoint]
 
+class Config:
+        from_attributes = True
 
 @router.get("/sessions", response_model=SessionsResponse)
 async def get_sessions(
@@ -140,3 +149,56 @@ async def clear_all_sessions(user_id: str = Depends(get_current_user_id)):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to clear sessions: {str(e)}")
+
+@router.get("/sessions/recent", response_model=List[SessionRow])
+async def get_recent_sessions(user_id: str = Depends(get_current_user_id)):
+    check_rate_limit(user_id, max_requests=10, window_seconds=60)
+
+    try:
+        result = supabase.table("therapy_sessions") \
+            .select("*") \
+            .eq("user_id", user_id) \
+            .not_.is_("summary", None) \
+            .order("created_at", desc=True) \
+            .limit(5) \
+            .execute()
+
+        sessions = result.data or []
+
+        normalized = []
+        for s in sessions:
+            duration = s.get("duration_minutes")
+            
+            # Calculate if missing/null/0 but timestamps exist
+            # FIXED: Use 'end_time' and 'start_time' (not 'ended_at'/'created_at')
+            if (duration is None or duration == 0) and s.get("end_time") and s.get("start_time"):
+                try:
+                    start_str = s["start_time"].replace('Z', '+00:00')
+                    end_str = s["end_time"].replace('Z', '+00:00')
+                    
+                    start = datetime.fromisoformat(start_str)
+                    end = datetime.fromisoformat(end_str)
+                    
+                    calc_duration = int((end - start).total_seconds() / 60)
+                    duration = max(1, calc_duration)  # Minimum 1 min
+                except Exception as e:
+                    print(f"Duration calc error: {e}")
+                    duration = 0
+            else:
+                # Convert existing value to int, default 0 if null
+                try:
+                    duration = int(duration) if duration is not None else 0
+                except (ValueError, TypeError):
+                    duration = 0
+
+            normalized.append({
+                **s,
+                "duration_minutes": duration,
+                "session_intensity": int(s.get("session_intensity") or 1)
+            })
+
+        return normalized
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Failed to fetch recent sessions")

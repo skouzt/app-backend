@@ -8,17 +8,17 @@ from typing import Any, Dict, Optional, cast, List
 from datetime import datetime, timezone
 import uuid
 
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from loguru import logger
 from pydantic import BaseModel
-from core.security import get_current_user_id
+from core.security import get_current_user_id, get_internal_or_user_id
 from db.supabase import supabase
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 from datetime import datetime
-from core.config import settings  # Add this import
+from core.config import settings  
 from config.server import ServerConfig
 from datetime import date
 from api.v1.users.subscription import router as user_subscription_router
@@ -26,9 +26,8 @@ from api.v1.users.profile import router as profile_router
 from api.v1.users.onboarding import router as onboarding_router
 from api.v1.users.onboarding_submit import router as onboarding_submit_router
 from api.v1.therapy.sessions import router as therapy_sessions_router
-
-
-from api.v1.billing.gumroad import router as billing_router
+from api.v1.usage import router as usage_router
+from api.v1.billing.dodo import router as billing_router
 
 from fastapi.routing import APIRoute
 from fastapi import APIRouter
@@ -38,6 +37,8 @@ load_dotenv()
 
 
 server_config = ServerConfig()
+
+
 
 if not server_config.livekit_api_key or not server_config.livekit_api_secret:
     logger.error("LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be set in environment")
@@ -56,8 +57,15 @@ class ConversationMessage(BaseModel):
     content: str
     timestamp: Optional[str] = None
 
+
+class SessionStartRequest(BaseModel):
+    session_id: Optional[str] = None
+
+
 class SessionEndRequest(BaseModel):
+    session_id: str
     user_id: str
+    minutes: int
     title: str
     summary: str
     session_intensity: int
@@ -113,7 +121,7 @@ app.include_router(user_subscription_router, prefix="/api/v1")
 app.include_router(onboarding_router, prefix="/api/v1/users")
 app.include_router(profile_router, prefix="/api/v1/users")
 app.include_router(therapy_sessions_router, prefix="/api/v1/therapy")
-
+app.include_router(usage_router, prefix="/api/v1")
 app.include_router(billing_router, prefix="/api/v1")
 app.include_router(onboarding_submit_router, prefix="/api/v1/users")
 
@@ -342,41 +350,96 @@ def get_status(pid: int):
     return JSONResponse({"bot_id": pid, "status": status, "room": room_name})
 
 
+
 @app.post("/session/start")
 async def start_session(
-    user_id: str = Depends(get_current_user_id),
+    payload: SessionStartRequest,
+    user_id: str = Depends(get_internal_or_user_id),
 ):
-    today_utc = datetime.now(timezone.utc).date().isoformat()
+    now = datetime.utcnow()
+    today = now.date().isoformat()
+    
+    # Check if session already exists for today
+    existing = supabase.table("therapy_sessions") \
+        .select("id, start_time") \
+        .eq("user_id", user_id) \
+        .eq("date", today) \
+        .limit(1) \
+        .execute()
+    
+    if existing.data:
+        # Return existing session - frontend/bot should use this ID
+        row = existing.data[0]
+        return {
+            "status": "resumed",
+            "session_id": row["id"],
+            "start_time": row["start_time"],
+            "message": "Continuing today's session"
+        }
+    
+    # Create new session only if none exists for today
+    session_id = payload.session_id or str(uuid.uuid4())
+    
+    supabase.table("therapy_sessions").insert({
+        "id": session_id,
+        "user_id": user_id,
+        "date": today,
+        "start_time": now.isoformat(),
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+    }).execute()
+
     return {
-        "status": "ok",
-        "date": today_utc,
+        "status": "started",
+        "session_id": session_id,
+        "start_time": now.isoformat(),
     }
 
 @app.post("/session/end")
 async def end_session(payload: SessionEndRequest):
+    now = datetime.utcnow()
     today = date.today().isoformat()
 
-    supabase.table("therapy_sessions").upsert(
-        {
+    # ✅ Update session row
+    supabase.table("therapy_sessions").update({
+        "end_time": now.isoformat(),
+        "duration_minutes": payload.minutes,
+        "title": payload.title,
+        "summary": payload.summary,
+        "session_intensity": payload.session_intensity,
+        "updated_at": now.isoformat(),
+    }).eq("id", payload.session_id).execute()
+
+
+    existing = supabase.table("daily_usage") \
+        .select("id, sessions_count, minutes_used") \
+        .eq("user_id", payload.user_id) \
+        .eq("usage_date", today) \
+        .limit(1) \
+        .execute()
+
+    if existing.data:
+        row = existing.data[0]
+
+        supabase.table("daily_usage").update({
+            "minutes_used": (row.get("minutes_used", 0) or 0) + payload.minutes,
+            "updated_at": now.isoformat(),
+        }).eq("id", row["id"]).execute()
+
+    else:
+        supabase.table("daily_usage").insert({
             "user_id": payload.user_id,
-            "date": today,
-            "title": payload.title,
-            "summary": payload.summary,
-            "session_intensity": payload.session_intensity,
-        },
-        on_conflict="user_id,date",
-    ).execute()
+            "usage_date": today,
+            "sessions_count": 1,
+            "minutes_used": payload.minutes,
+            "created_at": now.isoformat(),
+        }).execute()
 
     return {"status": "completed"}
-
-
-
 
 if __name__ == "__main__":
     import os
     import uvicorn
-
-    logger.info("Starting FastAPI server with LiveKit")
 
     port = int(os.environ.get("PORT", 8080)) 
 

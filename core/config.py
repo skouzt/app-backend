@@ -1,8 +1,14 @@
-# core/config.py
 from pydantic_settings import BaseSettings
 from typing import Optional
+from pydantic import ConfigDict 
+
 
 class Settings(BaseSettings):
+    model_config = ConfigDict(           
+        env_file=".env",
+        extra="allow"
+    )
+
     # --- Supabase ---
     SUPABASE_URL: str = ""
     SUPABASE_SERVICE_KEY: str = ""
@@ -12,15 +18,13 @@ class Settings(BaseSettings):
     CLERK_WEBHOOK_SECRET: str = ""
     CLERK_JWT_ISSUER: Optional[str] = None
     
-    # --- Gumroad ---
-    GUMROAD_API_KEY: str = ""  # From Gumroad Settings → Advanced
-    GUMROAD_PRODUCT_ID: str = "iauij"
-    GUMROAD_PRODUCT_PERMALINK: str = "aletheia"  # Your product permalink
-    GUMROAD_SELLER_ID: str = "JglTMXwp1tOqifxr0BhYdg==" 
-    GUMROAD_ACCESS_TOKEN: str = "" 
-    # Pricing tiers (in cents)
-    GUIDED_PRICE: int = 1500   # $15
-    EXTENDED_PRICE: int = 5000  # $50
+    # Dodo Payments
+    DODO_PAYMENTS_API_KEY: str = ""
+    DODO_WEBHOOK_SECRET: str = ""
+    DODO_PLAN_CLARITY_ID: str = ""
+    DODO_PLAN_INSIGHT_ID: str = ""
+    DODO_ENVIRONMENT: str = "test_mode"
+    DODO_DEFAULT_RETURN_URL: str = "aletheia://payment/result"
     
     # --- Application URLs ---
     API_BASE_URL: str = "http://localhost:8000"
@@ -35,8 +39,7 @@ class Settings(BaseSettings):
     # --- Security ---
     ALLOWED_ORIGINS: str = "*"
     
-    class Config:
-        env_file = ".env"
-        extra = "allow"
+    # ← class Config block deleted
+
 
 settings = Settings()

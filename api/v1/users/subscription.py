@@ -38,13 +38,10 @@ async def get_my_subscription(user: dict = Depends(verify_clerk_token)):
     try:
         result = (
             supabase
-            .table("user_info")
-            .select(
-                "subscription_plan",
-                "subscription_status",
-                "subscription_expires_at",
-            )
+            .table("dodo_subscriptions")
+            .select("plan_key, status, expires_at, next_billing_date")
             .eq("user_id", clerk_id)
+            .order("created_at", desc=True)
             .limit(1)
             .execute()
         )
@@ -69,7 +66,7 @@ async def get_my_subscription(user: dict = Depends(verify_clerk_token)):
     # Log successful fetch without exposing sensitive data
 
     return SubscriptionResponse(
-        plan=row.get("subscription_plan", "none"), # type: ignore
-        status=row.get("subscription_status", "inactive"), # type: ignore
-        expires_at=row.get("subscription_expires_at"), # type: ignore
+        plan=row.get("plan_key", "none"),
+        status=row.get("status", "inactive"),
+        expires_at=row.get("expires_at"),
     )
