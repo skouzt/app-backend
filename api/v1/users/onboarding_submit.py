@@ -23,12 +23,11 @@ class OnboardingSubmitResponse(BaseModel):
     user_id: str
     completed: bool = True
 
-@router.post("/onboarding-submit", response_model=OnboardingSubmitResponse)
+@router.post("/onboarding-submit")
 async def submit_onboarding(
     payload: OnboardingSubmitRequest,
     user_id: str = Depends(get_current_user_id)
 ):
-
     try:
         form_data = {
             "user_id": user_id,
@@ -45,26 +44,10 @@ async def submit_onboarding(
             "email": payload.email,
         }
 
-        # Check if exists (webhook might have created it)
-        existing = supabase.table("user_info") \
-            .select("user_id") \
-            .eq("user_id", user_id) \
-            .maybe_single() \
-            .execute()
+        result = supabase.table("user_info").insert(form_data).execute()
 
-        if existing.data:
-            # Update
-            supabase.table("user_info") \
-                .update(form_data) \
-                .eq("user_id", user_id) \
-                .execute()
-        else:
-            # Insert
-            supabase.table("user_info") \
-                .insert(form_data) \
-                .execute()
-
-        return OnboardingSubmitResponse(user_id=user_id, completed=True)
+        return {"ok": True}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save onboarding: {str(e)}")
+        print("🔥 ERROR:", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
