@@ -9,24 +9,23 @@ from db.supabase import supabase
 
 router = APIRouter()
 
-# ✅ PLAN CONFIG (matches your pricing)
 PLAN_CONFIG = {
     "clarity": {
         "sessions": 10,
         "minutes_per_session": 40,
-        "price":14,
+        "price": 14,
     },
     "insight": {
         "sessions": 15,
         "minutes_per_session": 40,
-        "price":19
+        "price": 19,
     },
 }
 
 
-# -------------------------------
-# Helpers
-# -------------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# HELPERS
+# ──────────────────────────────────────────────────────────────────────────────
 
 def get_current_month_range():
     today = date.today()
@@ -36,27 +35,25 @@ def get_current_month_range():
     return start.isoformat(), end.isoformat()
 
 
-# -------------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 # CHECK USAGE
-# -------------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 
 @router.get("/usage/check")
 async def check_session_allowed(
     user_id: str = Depends(get_current_user_id),
 ):
     try:
-        # 🔍 Fetch latest active subscription
         sub = (
             supabase.table("dodo_subscriptions")
-            .select("plan_key, status, expires_at")
+            .select("plan_key, status, expires_at, trial_end")
             .eq("user_id", user_id)
-            .eq("status", "active")
+            .in_("status", ["active", "trialing"])   # both pass the paywall
             .order("created_at", desc=True)
             .limit(1)
             .execute()
         )
 
-        # ❌ No subscription
         if not sub.data:
             return {
                 "allowed": False,
@@ -69,8 +66,8 @@ async def check_session_allowed(
 
         sub_row = sub.data[0]
         plan_key = sub_row.get("plan_key")
+        status = sub_row.get("status")
 
-        # ❌ Invalid plan
         if plan_key not in PLAN_CONFIG:
             return {
                 "allowed": False,
@@ -81,15 +78,24 @@ async def check_session_allowed(
                 "plan": plan_key,
             }
 
-        # ❌ Expiry check
-        expires_at = sub_row.get("expires_at")
-        if expires_at:
+        # ── Expiry check ──────────────────────────────────────────────────────
+        # For trialing users: check trial_end.
+        # For active users:   check expires_at.
+        # Both fields map to expires_at in the DB (trial_end is also set there),
+        # but being explicit here makes the logic readable and safe.
+        check_date = (
+            sub_row.get("trial_end")
+            if status == "trialing"
+            else sub_row.get("expires_at")
+        )
+
+        if check_date:
             try:
-                expiry_dt = datetime.fromisoformat(expires_at)
+                expiry_dt = datetime.fromisoformat(check_date)
                 if expiry_dt < datetime.utcnow():
                     return {
                         "allowed": False,
-                        "reason": "expired",
+                        "reason": "trial_expired" if status == "trialing" else "expired",
                         "sessions_used": 0,
                         "sessions_limit": 0,
                         "remaining_sessions": 0,
@@ -98,10 +104,8 @@ async def check_session_allowed(
             except Exception:
                 pass
 
-        # ✅ Now safe to define limit
+        # ── Session count ─────────────────────────────────────────────────────
         limit = PLAN_CONFIG[plan_key]["sessions"]
-
-        # 📊 Get monthly usage
         month_start, month_end = get_current_month_range()
 
         usage = (
@@ -122,19 +126,18 @@ async def check_session_allowed(
             "sessions_limit": limit,
             "remaining_sessions": remaining,
             "plan": plan_key,
+            "is_trialing": status == "trialing",
             "reason": None if sessions_used < limit else "limit_reached",
         }
 
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to check usage: {str(e)}"
-        )
-        
-# -------------------------------
+        raise HTTPException(status_code=500, detail=f"Failed to check usage: {str(e)}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # RECORD USAGE
-# -------------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 
 @router.post("/usage/record")
 async def record_session(
@@ -155,12 +158,8 @@ async def record_session(
             return {"recorded": True}
 
         except Exception:
-            # already exists → ignore
             return {"recorded": False, "message": "Already recorded for today"}
 
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to record session: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to record session: {str(e)}")

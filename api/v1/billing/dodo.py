@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, TypedDict
 
 import dodopayments
@@ -24,19 +24,20 @@ logger = structlog.get_logger(__name__)
 # PLAN CONFIG
 # ──────────────────────────────────────────────────────────────────────────────
 
-
 PLAN_CONFIG: Dict[str, Dict[str, Any]] = {
     "clarity": {
         "name": "Clarity",
         "price_usd": 15,
         "sessions_per_month": 10,
         "minutes_per_session": 40,
+        "trial_period_days": 1,
     },
     "insight": {
         "name": "Insight",
         "price_usd": 20,
         "sessions_per_month": 15,
         "minutes_per_session": 40,
+        "trial_period_days": 1,
     },
 }
 
@@ -53,6 +54,7 @@ class DodoSubscriptionRow(TypedDict, total=False):
     status: str
     expires_at: str
     next_billing_date: str
+    trial_end: str
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -70,6 +72,8 @@ class SubscriptionStatusResponse(BaseModel):
     plan: str
     expires_at: Optional[str] = None
     next_billing_date: Optional[str] = None
+    trial_end: Optional[str] = None
+    is_trialing: bool = False
     sessions_per_month: int
     minutes_per_session: int
 
@@ -127,6 +131,8 @@ async def create_dodo_checkout(
     if not email:
         raise HTTPException(400, "Email not found")
 
+    plan_cfg = PLAN_CONFIG[body.plan_key]
+
     try:
         checkout_url, subscription_id = dodo.get_checkout_url(
             plan_key=body.plan_key,
@@ -134,6 +140,7 @@ async def create_dodo_checkout(
             customer_name=body.customer_name or email.split("@")[0],
             return_url=body.return_url,
             user_id=user_id,
+            trial_period_days=plan_cfg.get("trial_period_days", 0),
         )
     except Exception as e:
         logger.error("checkout_failed", exc_info=True)
@@ -150,13 +157,14 @@ async def create_dodo_checkout(
     return {
         "url": checkout_url,
         "subscription_id": subscription_id,
-        "plan": PLAN_CONFIG[body.plan_key]["name"],
-        "sessions_per_month": PLAN_CONFIG[body.plan_key]["sessions_per_month"],
-        "minutes_per_session": PLAN_CONFIG[body.plan_key]["minutes_per_session"],
+        "plan": plan_cfg["name"],
+        "sessions_per_month": plan_cfg["sessions_per_month"],
+        "minutes_per_session": plan_cfg["minutes_per_session"],
+        "trial_period_days": plan_cfg.get("trial_period_days", 0),
     }
 
 
-# ── 2. WEBHOOK (FIXED + IDEMPOTENT) ───────────────────────────────────────────
+# ── 2. WEBHOOK ────────────────────────────────────────────────────────────────
 
 @router.post("/billing/dodo/webhook")
 async def dodo_webhook(request: Request):
@@ -183,7 +191,6 @@ async def dodo_webhook(request: Request):
         exists = supabase.table("webhook_events").select("id").eq("id", event_id).execute()
         if exists.data:
             return {"received": True}
-
         supabase.table("webhook_events").insert({"id": event_id}).execute()
 
     event_type = payload.get("type")
@@ -198,8 +205,14 @@ async def dodo_webhook(request: Request):
     elif event_type == "subscription.cancelled":
         await _on_subscription_cancelled(data)
 
+    elif event_type == "subscription.expired":
+        await _on_subscription_expired(data)
+
     elif event_type in ("subscription.failed", "subscription.past_due"):
         await _on_subscription_failed(data)
+
+    elif event_type == "subscription.on_hold":
+        await _on_subscription_failed(data)  # treat on_hold same as past_due
 
     return {"received": True}
 
@@ -210,7 +223,7 @@ async def dodo_webhook(request: Request):
 async def check_and_activate_subscription(user: dict = Depends(verify_clerk_token)):
     user_id = user.get("user_id") or user.get("sub")
 
-    # ✅ STEP 1: check if already activated via webhook
+    # STEP 1: already in DB (webhook already fired)
     existing = (
         supabase.table("dodo_subscriptions")
         .select("*")
@@ -221,17 +234,20 @@ async def check_and_activate_subscription(user: dict = Depends(verify_clerk_toke
     if existing.data:
         sub = existing.data[0]
         plan = sub.get("plan_key")
+        status = sub.get("status")
 
         return {
             "found": True,
-            "activated": False,
             "already_activated": True,
+            "status": status,
+            "is_trialing": status == "trialing",
             "plan": plan,
+            "trial_end": sub.get("trial_end"),
             "sessions_per_month": PLAN_CONFIG[plan]["sessions_per_month"],
             "minutes_per_session": PLAN_CONFIG[plan]["minutes_per_session"],
         }
 
-    # ✅ STEP 2: fallback → check pending (optional safety)
+    # STEP 2: webhook hasn't fired yet — check pending
     pv = (
         supabase.table("pending_verifications")
         .select("*")
@@ -241,15 +257,44 @@ async def check_and_activate_subscription(user: dict = Depends(verify_clerk_toke
         .execute()
     )
 
-    if pv.data:
+    if not pv.data:
+        return {"found": False}
+
+    pending = pv.data[0]
+    plan_key = pending.get("plan_key")
+    sub_id = pending.get("dodo_subscription_id")
+    plan_cfg = PLAN_CONFIG.get(plan_key, {})
+    trial_days = plan_cfg.get("trial_period_days", 0)
+
+    if trial_days > 0:
+        # Optimistically write trialing so user gets access immediately.
+        # subscription.active webhook will upsert over this with verified status.
+        trial_end = (datetime.utcnow() + timedelta(days=trial_days)).isoformat()
+
+        _upsert_subscription(user_id, {
+            "user_id": user_id,
+            "dodo_subscription_id": sub_id,
+            "plan_key": plan_key,
+            "status": "trialing",
+            "expires_at": trial_end,
+            "next_billing_date": trial_end,
+            "trial_end": trial_end,
+            "updated_at": datetime.utcnow().isoformat(),
+        })
+
         return {
             "found": True,
-            "activated": False,
-            "pending": True
+            "activated": True,
+            "status": "trialing",
+            "is_trialing": True,
+            "plan": plan_key,
+            "trial_end": trial_end,
+            "sessions_per_month": plan_cfg["sessions_per_month"],
+            "minutes_per_session": plan_cfg["minutes_per_session"],
         }
 
-    return {"found": False}
-    
+    # No trial — wait for webhook
+    return {"found": True, "activated": False, "pending": True}
 
 
 # ── 4. SUBSCRIPTION STATUS ────────────────────────────────────────────────────
@@ -270,14 +315,16 @@ async def get_my_subscription(user: dict = Depends(verify_clerk_token)):
 
     row = res.data[0]
     plan = row.get("plan_key")
-
+    status = row.get("status")
     cfg = PLAN_CONFIG.get(plan, {})
 
     return SubscriptionStatusResponse(
-        status=row.get("status"),
+        status=status,
         plan=plan,
         expires_at=row.get("expires_at"),
         next_billing_date=row.get("next_billing_date"),
+        trial_end=row.get("trial_end"),
+        is_trialing=status == "trialing",
         sessions_per_month=cfg.get("sessions_per_month", 0),
         minutes_per_session=cfg.get("minutes_per_session", 0),
     )
@@ -312,33 +359,50 @@ async def _on_subscription_activated(data: dict):
     user_id = data.get("metadata", {}).get("user_id")
     plan = data.get("metadata", {}).get("plan_key")
     sub_id = data.get("subscription_id")
-
     next_billing = data.get("next_billing_date")
+
+    # ── Detect trial via Dodo's workaround ───────────────────────────────────
+    # Trial = exactly 1 payment exists AND its amount is 0
+    is_trialing = False
+    trial_end = None
+
+    try:
+        payments = dodo._client.payments.list(subscription_id=sub_id)
+        payment_list = payments.items if hasattr(payments, "items") else []
+
+        if len(payment_list) == 1 and getattr(payment_list[0], "total_amount", None) == 0:
+            is_trialing = True
+            trial_end = next_billing  # first real charge fires at next_billing_date
+    except Exception:
+        logger.warning("trial_payment_check_failed", sub_id=sub_id)
 
     _upsert_subscription(user_id, {
         "user_id": user_id,
         "dodo_subscription_id": sub_id,
         "plan_key": plan,
-        "status": "active",
-        "expires_at": next_billing,
+        "status": "trialing" if is_trialing else "active",
+        "expires_at": trial_end if is_trialing else next_billing,
         "next_billing_date": next_billing,
+        "trial_end": trial_end,
         "updated_at": datetime.utcnow().isoformat(),
     })
 
-    # ✅ ADD THIS (CRITICAL)
     supabase.table("pending_verifications")\
         .delete()\
         .eq("dodo_subscription_id", sub_id)\
         .execute()
 
+
 async def _on_subscription_renewed(data: dict):
     sub_id = data.get("subscription_id")
     next_billing = data.get("next_billing_date")
 
+    # Covers both trial→paid conversion and regular renewal
     supabase.table("dodo_subscriptions").update({
         "status": "active",
         "expires_at": next_billing,
         "next_billing_date": next_billing,
+        "trial_end": None,              # clear trial on conversion
     }).eq("dodo_subscription_id", sub_id).execute()
 
 
@@ -347,6 +411,14 @@ async def _on_subscription_cancelled(data: dict):
 
     supabase.table("dodo_subscriptions").update({
         "status": "cancelled",
+    }).eq("dodo_subscription_id", sub_id).execute()
+
+
+async def _on_subscription_expired(data: dict):
+    sub_id = data.get("subscription_id")
+
+    supabase.table("dodo_subscriptions").update({
+        "status": "expired",
     }).eq("dodo_subscription_id", sub_id).execute()
 
 
