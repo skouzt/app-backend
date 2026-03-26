@@ -49,34 +49,40 @@ class DodoClient:
         customer_name: str,
         return_url: str,
         user_id: str,
+        trial_period_days: int = 0,
     ) -> tuple[str, str]:
-    
+
         product_id = PLAN_PRODUCT_MAP.get(plan_key)
         if not product_id:
             raise ValueError(f"Unknown plan: {plan_key}")
 
-        session = self._client.subscriptions.create(
-            billing={
+        create_kwargs = {
+            "billing": {
                 "city": "",
                 "country": "US",
                 "state": "",
                 "street": "",
                 "zipcode": "0",
             },
-            customer={
+            "customer": {
                 "email": email,
                 "name": customer_name,
             },
-            product_id=product_id,
-            quantity=1,
-            return_url = return_url or settings.DODO_DEFAULT_RETURN_URL,
-            payment_link=True,
-            metadata={
+            "product_id": product_id,
+            "quantity": 1,
+            "return_url": return_url or settings.DODO_DEFAULT_RETURN_URL,
+            "payment_link": True,
+            "metadata": {
                 "plan_key": plan_key,
                 "user_id": user_id,
                 "app": "aletheia",
             },
-        )
+        }
+
+        if trial_period_days > 0:
+            create_kwargs["trial_period_days"] = trial_period_days
+
+        session = self._client.subscriptions.create(**create_kwargs)
 
         return str(session.payment_link), str(session.subscription_id)
 
