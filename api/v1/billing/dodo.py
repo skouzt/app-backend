@@ -27,17 +27,17 @@ logger = structlog.get_logger(__name__)
 PLAN_CONFIG: Dict[str, Dict[str, Any]] = {
     "clarity": {
         "name": "Clarity",
-        "price_usd": 15,
+        "price_usd": 14,
         "sessions_per_month": 10,
         "minutes_per_session": 40,
-        "trial_period_days": 1,
+        "trial_period_days": 3,
     },
     "insight": {
         "name": "Insight",
-        "price_usd": 20,
+        "price_usd": 19,
         "sessions_per_month": 15,
         "minutes_per_session": 40,
-        "trial_period_days": 1,
+        "trial_period_days": 3,
     },
 }
 
