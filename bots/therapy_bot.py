@@ -79,7 +79,7 @@ class TherapyBot(BaseBot):
             logger.warning("BOT_USER_ID not set in environment. Using generic therapy prompt.")
             system_messages: List[ChatCompletionMessageParam] = [{
                 "role": "system", 
-                "content": "You are Aletheia, a warm and supportive therapist."
+                "content": "You are Lily, a warm and supportive therapist."
             }]
         else:
             logger.info(f"Fetching personalized prompt for {safe_user_ref}")
