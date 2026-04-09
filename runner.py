@@ -75,7 +75,7 @@ async def idle_wait(pid: int, livekit_url: str) -> dict:
 
 
 def cli() -> None:
-    parser = argparse.ArgumentParser(description="Aletheia Therapy Bot Runner")
+    parser = argparse.ArgumentParser(description="Lily Therapy Bot Runner")
 
     # LiveKit arguments
     parser.add_argument("-l", "--livekit-url", type=str)
