@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional, TypedDict
 import dodopayments
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+import requests
 import structlog
 
 from core.config import settings
@@ -82,15 +83,41 @@ class SubscriptionStatusResponse(BaseModel):
 # HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
 
-async def _get_user_email(user: dict, user_id: str) -> Optional[str]:
-    email = user.get("email")
-    if email:
-        return str(email)
 
-    res = supabase.table("user_info").select("email").eq("user_id", user_id).execute()
-    if res.data and isinstance(res.data[0], dict):
-        return str(res.data[0].get("email", ""))
-    return None
+async def get_email_from_clerk(user_id: str):
+    try:
+        res = requests.get(
+            f"https://api.clerk.com/v1/users/{user_id}",
+            headers={
+                "Authorization": f"Bearer {settings.CLERK_SECRET_KEY}",
+                "Content-Type": "application/json",
+            }
+        )
+
+        if res.status_code != 200:
+            logger.error("clerk_fetch_failed", status=res.status_code, body=res.text)
+            return None
+
+        data = res.json()
+
+        # ✅ Prefer primary email
+        primary_id = data.get("primary_email_address_id")
+
+        emails = data.get("email_addresses", [])
+
+        for email_obj in emails:
+            if email_obj.get("id") == primary_id:
+                return email_obj.get("email_address")
+
+        # fallback
+        if emails:
+            return emails[0].get("email_address")
+
+        return None
+
+    except Exception:
+        logger.error("clerk_email_fetch_error", exc_info=True)
+        return None
 
 
 def _upsert_subscription(user_id: str, payload: dict) -> None:
@@ -127,9 +154,11 @@ async def create_dodo_checkout(
     if body.plan_key not in PLAN_CONFIG:
         raise HTTPException(400, "Invalid plan")
 
-    email = await _get_user_email(user, user_id)
+    email = await get_email_from_clerk(user_id)
+
     if not email:
         raise HTTPException(400, "Email not found")
+
 
     plan_cfg = PLAN_CONFIG[body.plan_key]
 

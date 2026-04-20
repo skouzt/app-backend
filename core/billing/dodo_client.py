@@ -58,11 +58,11 @@ class DodoClient:
 
         create_kwargs = {
             "billing": {
-                "city": "",
+                "city": "Test",
                 "country": "US",
-                "state": "",
-                "street": "",
-                "zipcode": "0",
+                "state": "CA",
+                "street": "Test Street",
+                "zipcode": "94103",
             },
             "customer": {
                 "email": email,
@@ -70,7 +70,7 @@ class DodoClient:
             },
             "product_id": product_id,
             "quantity": 1,
-            "return_url": return_url or settings.DODO_DEFAULT_RETURN_URL,
+            "return_url": return_url,
             "payment_link": True,
             "metadata": {
                 "plan_key": plan_key,

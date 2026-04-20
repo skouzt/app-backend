@@ -298,7 +298,7 @@ async def _start_bot_fresh(room_name: str, token: str, user_id: str) -> int:
 async def health_check():
     return {
         "status": "ok",
-        "service": "Aletheia Therapy Bot",
+        "service": "Lily Therapy Bot",
         "timestamp": datetime.now().isoformat(),
         "bots_running": len([p for p, _, _ in bot_procs.values() if p.poll() is None]),
         "bots_idle": idle_bot_queue.qsize(),  # ← useful for monitoring
