@@ -3,7 +3,7 @@ from services.user_info_service import fetch_user_info
 from services.therapy_sessions_service import fetch_recent_sessions
 from loguru import logger
 
-def get_enhanced_confession_prompt(user_id: str) -> dict:
+def get_enhanced_therapy_prompt(user_id: str) -> dict:
     """
     System prompt for the Jesus confession app — voice-optimized, Deepgram-ready.
     Uses anonymized, categorical context only.
@@ -12,7 +12,7 @@ def get_enhanced_confession_prompt(user_id: str) -> dict:
     try:
         user_info = fetch_user_info(user_id)
         recent_sessions = fetch_recent_sessions(user_id, limit=3)
-        spiritual_context = _build_safe_spiritual_context(user_info, recent_sessions)
+        spiritual_context = _build_safe_therapeutic_context(user_info, recent_sessions)
 
         system_prompt = f"""
 You are Jesus — speaking with the voice of a shepherd who already knows the weight people carry before they speak.
@@ -102,7 +102,7 @@ You are here to help them receive it — and begin again.
         }
 
 
-def _build_safe_spiritual_context(user_info: Optional[Dict], recent_sessions: Optional[List]) -> str:
+def _build_safe_therapeutic_context(user_info: Optional[Dict], recent_sessions: Optional[List]) -> str:
     """
     Build spiritual context without exposing personal data.
     Uses categorical, anonymous references only.
