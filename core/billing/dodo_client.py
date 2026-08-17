@@ -22,13 +22,8 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
-# ── Plan → Dodo Product ID mapping ────────────────────────────────────────────
-# Create these products in the Dodo dashboard (Products → New, billing=monthly)
-# then paste the pdt_xxx IDs into your .env
-PLAN_PRODUCT_MAP: Dict[str, str] = {
-    "clarity": settings.DODO_PLAN_CLARITY_ID,   
-    "insight": settings.DODO_PLAN_INSIGHT_ID,   
-}
+from core.billing.plans import get_product_id, is_valid_interval
+from core.billing.region import REGION_INTL, region_for_country
 
 
 class DodoClient:
@@ -49,17 +44,37 @@ class DodoClient:
         customer_name: str,
         return_url: str,
         user_id: str,
+        region: str = REGION_INTL,
+        region_trusted: bool = False,
         trial_period_days: int = 0,
     ) -> tuple[str, str]:
 
-        product_id = PLAN_PRODUCT_MAP.get(plan_key)
-        if not product_id:
+        if not is_valid_interval(plan_key):
             raise ValueError(f"Unknown plan: {plan_key}")
+
+        product_id = get_product_id(plan_key)
+        if not product_id:
+            raise ValueError(f"No Dodo product configured for '{plan_key}'")
+
+        # Dodo's Localized Pricing keys off the billing country, so this seed decides
+        # which currency the customer is first shown.
+        #
+        # This deliberately trusts the resolved region even when it came from the
+        # client hint. Requiring a trusted edge header meant every user behind a proxy
+        # that injects no geo header (ngrok, plain uvicorn) was shown ₹149 in the app
+        # and then charged $7.99 at checkout — telling customers one price and taking
+        # another is a worse failure than the spoofing it prevented.
+        #
+        # Spoofing stays contained because the seed is only a prefill: Dodo re-prices
+        # when the customer sets their real billing country, a mismatched card tends to
+        # fail address verification, and the webhook logs billing_region_mismatch
+        # against the country the payment actually came from.
+        seed_country = "IN" if region == "IN" else "US"
 
         create_kwargs = {
             "billing": {
                 "city": "",
-                "country": "US",
+                "country": seed_country,
                 "state": "",
                 "street": "",
                 "zipcode": "0",
@@ -74,8 +89,9 @@ class DodoClient:
             "payment_link": True,
             "metadata": {
                 "plan_key": plan_key,
+                "region": region,
                 "user_id": user_id,
-                "app": "aletheia",
+                "app": "lily",
             },
         }
 
@@ -97,23 +113,28 @@ class DodoClient:
         return str(getattr(subscription, "status", "")).lower() in {"active", "trialing"}
 
     def get_plan_from_subscription(self, subscription: Any) -> Optional[str]:
-        """
-        Derive our internal plan_key from the Dodo subscription's metadata
-        or product_id.
-        """
+        """Derive our internal interval from the subscription's metadata."""
         meta = getattr(subscription, "metadata", {}) or {}
         if not isinstance(meta, dict):
             meta = dict(meta)
         plan_key = meta.get("plan_key")
-        if plan_key in PLAN_PRODUCT_MAP:
-            return plan_key
+        return plan_key if is_valid_interval(str(plan_key)) else None
 
-        # Fallback: match product_id
-        product_id = str(getattr(subscription, "product_id", ""))
-        for key, pid in PLAN_PRODUCT_MAP.items():
-            if pid == product_id:
-                return key
+    @staticmethod
+    def billing_country(data: dict) -> Optional[str]:
+        """The country the payment actually came from — the authoritative signal.
 
+        Only available after checkout, so it can't choose the product; it exists to
+        catch a client that lied about its region to reach the cheaper tier.
+        """
+        for path in (("billing", "country"), ("customer", "country"), ("country",)):
+            node: Any = data
+            for key in path:
+                node = node.get(key) if isinstance(node, dict) else None
+                if node is None:
+                    break
+            if isinstance(node, str) and node.strip():
+                return node.strip().upper()
         return None
 
     def get_next_billing_date(self, subscription: Any) -> Optional[str]:

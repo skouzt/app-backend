@@ -1,35 +1,39 @@
+# Every dependency is pinned to an exact version.
+#
+# Ranges meant a rebuild could install something never tested here — and the range
+# on dodopayments spanned an API change: this code was written against 1.87.x,
+# where localized prices are absent from the SDK, which is why
+# scripts/sync_dodo_prices.py calls that endpoint over REST. A float to 1.112 would
+# not break the build, it would just quietly mean the running code and the tested
+# code are different.
+#
+# Pins were realigned to the versions this venv actually runs: requirements.txt had
+# drifted behind the installed set (openai 1.74 vs 2.9, supabase 2.13 vs 2.27), so a
+# clean Docker build would have deployed a stack nothing was tested against.
+#
+# To upgrade: change a pin deliberately, reinstall, and run the test scripts.
+
 # API Server
 fastapi==0.115.8
 uvicorn[standard]==0.34.0
-aiohttp>=3.9,<3.11.13
-requests==2.31.0
+httpx==0.28.1
+requests==2.32.5
 
-# LiveKit for real-time audio
-livekit==1.0.20
-livekit-api==1.0.7
-livekit-protocol==1.1.1
+# LLM
+openai==2.9.0
 
-# Pipecat AI pipeline (NO whisper, NO torch)
-pipecat-ai[openai,silero,google,deepgram,inworld]==0.0.103
-
-# LLM Providers
-openai==1.74.0
-google-generativeai==0.8.0
-
-elevenlabs
-dodopayments>=0.1.0
+# Payments
+# 1.87.1 has no products.localized_prices resource; the sync script uses REST.
+dodopayments==1.87.1
 
 # Database & Auth
-supabase==2.13.0
-python-jose==3.3.0
+supabase==2.27.0
+python-jose==3.5.0
 
 # Utilities
 loguru==0.7.3
 python-dotenv==1.0.1
-pytz==2025.1
-pydantic>=2.6,<3
-pydantic-settings>=2.2,<3
-typing-extensions>=4.10
-pydub==0.25.1
-structlog==24.1.0
-
+pydantic==2.12.5
+pydantic-settings==2.12.0
+typing-extensions==4.15.0
+structlog==25.5.0

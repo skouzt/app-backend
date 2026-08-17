@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from loguru import logger
 from pydantic import BaseModel
 from typing import Optional
 from core.security import get_current_user_id
@@ -49,5 +50,7 @@ async def submit_onboarding(
         return {"ok": True}
 
     except Exception as e:
-        print("🔥 ERROR:", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        # The Postgres error names tables, columns and constraints. That belongs
+        # in the log, not in a response body.
+        logger.error(f"onboarding submit failed: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail="Could not save your answers")

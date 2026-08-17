@@ -36,9 +36,9 @@ async def get_profile(user_id: str = Depends(get_current_user_id)):
 
         return ProfileResponse()
 
-    except Exception as e:
+    except Exception:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to fetch profile: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch profile")
 
 
 @router.post("/profile")
@@ -74,6 +74,6 @@ async def update_profile(
 
         return {"status": "success"}
 
-    except Exception as e:
+    except Exception:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to save profile: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to save profile")

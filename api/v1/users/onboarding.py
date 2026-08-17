@@ -21,6 +21,6 @@ async def get_onboarding_status(user_id: str = Depends(get_current_user_id)):
         completed = result.data is not None and len(result.data) > 0
         return OnboardingStatusResponse(completed=completed)
 
-    except Exception as e:
+    except Exception:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to check onboarding status: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to check onboarding status")

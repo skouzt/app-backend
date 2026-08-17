@@ -2,30 +2,21 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from typing import List, Dict
+from typing import List
 from typing import Optional
-import time
 import traceback
+from core.rate_limit import Limit, enforce
 from core.security import get_current_user_id
 from db.supabase import supabase
 
 router = APIRouter()
 
-request_history: Dict[str, List[float]] = {}
 
+# The old module-level `request_history` dict never evicted anyone, so it grew
+# with every user who ever called the API and was never reclaimed. core.rate_limit
+# sweeps idle entries and adds a daily cap on top of the burst window.
 def check_rate_limit(user_id: str, max_requests: int = 10, window_seconds: int = 60):
-    now = time.time()
-    user_requests = request_history.get(user_id, [])
-    user_requests = [t for t in user_requests if now - t < window_seconds]
-
-    if len(user_requests) >= max_requests:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Rate limit exceeded: {max_requests} requests per {window_seconds}s"
-        )
-
-    user_requests.append(now)
-    request_history[user_id] = user_requests
+    enforce(user_id, "therapy_read", Limit(max_requests, window_seconds, daily=2000))
 
 
 
@@ -97,9 +88,9 @@ async def get_sessions(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to fetch sessions: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch sessions")
 
 
 @router.get("/journey", response_model=JourneyResponse)
@@ -131,9 +122,9 @@ async def get_journey(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to fetch journey: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch journey")
 
 
 @router.post("/sessions/clear")
@@ -146,9 +137,9 @@ async def clear_all_sessions(user_id: str = Depends(get_current_user_id)):
 
         return {"status": "success", "deleted": len(result.data) if result.data else 0}
 
-    except Exception as e:
+    except Exception:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to clear sessions: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to clear sessions")
 
 @router.get("/sessions/recent", response_model=List[SessionRow])
 async def get_recent_sessions(user_id: str = Depends(get_current_user_id)):
@@ -199,6 +190,6 @@ async def get_recent_sessions(user_id: str = Depends(get_current_user_id)):
 
         return normalized
 
-    except Exception as e:
+    except Exception:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Failed to fetch recent sessions")

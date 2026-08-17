@@ -13,6 +13,11 @@ import structlog
 from core.config import settings
 from core.security import verify_clerk_token
 from core.billing.dodo_client import DodoClient
+from core.billing.plans import TRIAL_DAYS, describe, get_plan, is_valid_interval
+from core.billing.region import (
+    REGION_INTL, is_trusted, region_for_country, resolve_billing_country,
+    resolve_billing_region,
+)
 from db.supabase import supabase
 
 router = APIRouter()
@@ -23,24 +28,6 @@ logger = structlog.get_logger(__name__)
 # ──────────────────────────────────────────────────────────────────────────────
 # PLAN CONFIG
 # ──────────────────────────────────────────────────────────────────────────────
-
-PLAN_CONFIG: Dict[str, Dict[str, Any]] = {
-    "clarity": {
-        "name": "Clarity",
-        "price_usd": 14,
-        "sessions_per_month": 10,
-        "minutes_per_session": 40,
-        "trial_period_days": 3,
-    },
-    "insight": {
-        "name": "Insight",
-        "price_usd": 19,
-        "sessions_per_month": 15,
-        "minutes_per_session": 40,
-        "trial_period_days": 3,
-    },
-}
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # TYPES
@@ -62,7 +49,8 @@ class DodoSubscriptionRow(TypedDict, total=False):
 # ──────────────────────────────────────────────────────────────────────────────
 
 class CreateCheckoutRequest(BaseModel):
-    plan_key: str
+    plan_key: str                      # "monthly" | "yearly"
+    region: Optional[str] = None       # display hint only; the server re-resolves
     customer_name: Optional[str] = None
     return_url: Optional[str] = settings.DODO_DEFAULT_RETURN_URL
 
@@ -74,8 +62,11 @@ class SubscriptionStatusResponse(BaseModel):
     next_billing_date: Optional[str] = None
     trial_end: Optional[str] = None
     is_trialing: bool = False
-    sessions_per_month: int
-    minutes_per_session: int
+    region: Optional[str] = None
+    currency: Optional[str] = None
+    amount: Optional[float] = None
+    period: Optional[str] = None
+    unlimited: bool = True
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -118,20 +109,31 @@ def _upsert_subscription(user_id: str, payload: dict) -> None:
 @router.post("/billing/create-checkout")
 async def create_dodo_checkout(
     body: CreateCheckoutRequest,
+    request: Request,
     user: dict = Depends(verify_clerk_token),
 ):
     user_id = user.get("user_id") or user.get("sub")
     if not user_id:
         raise HTTPException(400, "User ID not found")
 
-    if body.plan_key not in PLAN_CONFIG:
+    if not is_valid_interval(body.plan_key):
         raise HTTPException(400, "Invalid plan")
+
+    # The client's `region` is derived from device locale and is trivially spoofable,
+    # so it only wins if the edge gave us nothing better.
+    # Country-level now that every market has its own price; the old IN/INTL split
+    # would have shown a Japanese customer the base USD price while Dodo charged ¥.
+    region, source = resolve_billing_country(request, body.region)
+    if not is_trusted(source) and body.region and body.region.upper() != region:
+        logger.warning("region_hint_overridden", claimed=body.region, resolved=region)
+
+    plan = get_plan(body.plan_key, region)
+    if not plan:
+        raise HTTPException(400, "No pricing for this plan and region")
 
     email = await _get_user_email(user, user_id)
     if not email:
         raise HTTPException(400, "Email not found")
-
-    plan_cfg = PLAN_CONFIG[body.plan_key]
 
     try:
         checkout_url, subscription_id = dodo.get_checkout_url(
@@ -140,8 +142,14 @@ async def create_dodo_checkout(
             customer_name=body.customer_name or email.split("@")[0],
             return_url=body.return_url,
             user_id=user_id,
-            trial_period_days=plan_cfg.get("trial_period_days", 0),
+            region=region,
+            region_trusted=is_trusted(source),
+            trial_period_days=TRIAL_DAYS,
         )
+    except ValueError as e:
+        # Missing product mapping is a configuration problem, not a payment failure.
+        logger.error("checkout_misconfigured", error=str(e))
+        raise HTTPException(503, str(e))
     except Exception as e:
         logger.error("checkout_failed", exc_info=True)
         raise HTTPException(502, str(e))
@@ -150,6 +158,7 @@ async def create_dodo_checkout(
         "id": str(uuid.uuid4()),
         "user_id": user_id,
         "plan_key": body.plan_key,
+        "region": region,
         "dodo_subscription_id": subscription_id,
         "created_at": datetime.utcnow().isoformat(),
     }).execute()
@@ -157,10 +166,8 @@ async def create_dodo_checkout(
     return {
         "url": checkout_url,
         "subscription_id": subscription_id,
-        "plan": plan_cfg["name"],
-        "sessions_per_month": plan_cfg["sessions_per_month"],
-        "minutes_per_session": plan_cfg["minutes_per_session"],
-        "trial_period_days": plan_cfg.get("trial_period_days", 0),
+        **describe(body.plan_key, region),
+        "region_source": source,
     }
 
 
@@ -243,8 +250,7 @@ async def check_and_activate_subscription(user: dict = Depends(verify_clerk_toke
             "is_trialing": status == "trialing",
             "plan": plan,
             "trial_end": sub.get("trial_end"),
-            "sessions_per_month": PLAN_CONFIG[plan]["sessions_per_month"],
-            "minutes_per_session": PLAN_CONFIG[plan]["minutes_per_session"],
+            **describe(plan, sub.get("region") or REGION_INTL),
         }
 
     # STEP 2: webhook hasn't fired yet — check pending
@@ -263,8 +269,9 @@ async def check_and_activate_subscription(user: dict = Depends(verify_clerk_toke
     pending = pv.data[0]
     plan_key = pending.get("plan_key")
     sub_id = pending.get("dodo_subscription_id")
-    plan_cfg = PLAN_CONFIG.get(plan_key, {})
-    trial_days = plan_cfg.get("trial_period_days", 0)
+    region = pending.get("region") or REGION_INTL
+    plan_cfg = get_plan(plan_key, region) or {}
+    trial_days = TRIAL_DAYS if plan_cfg else 0
 
     if trial_days > 0:
         # Optimistically write trialing so user gets access immediately.
@@ -275,6 +282,9 @@ async def check_and_activate_subscription(user: dict = Depends(verify_clerk_toke
             "user_id": user_id,
             "dodo_subscription_id": sub_id,
             "plan_key": plan_key,
+            "region": region,
+            "currency": plan_cfg.get("currency"),
+            "amount": plan_cfg.get("amount"),
             "status": "trialing",
             "expires_at": trial_end,
             "next_billing_date": trial_end,
@@ -289,8 +299,7 @@ async def check_and_activate_subscription(user: dict = Depends(verify_clerk_toke
             "is_trialing": True,
             "plan": plan_key,
             "trial_end": trial_end,
-            "sessions_per_month": plan_cfg["sessions_per_month"],
-            "minutes_per_session": plan_cfg["minutes_per_session"],
+            **describe(plan_key, region),
         }
 
     # No trial — wait for webhook
@@ -306,17 +315,13 @@ async def get_my_subscription(user: dict = Depends(verify_clerk_token)):
     res = supabase.table("dodo_subscriptions").select("*").eq("user_id", user_id).execute()
 
     if not res.data:
-        return SubscriptionStatusResponse(
-            status="none",
-            plan="none",
-            sessions_per_month=0,
-            minutes_per_session=0,
-        )
+        return SubscriptionStatusResponse(status="none", plan="none")
 
     row = res.data[0]
     plan = row.get("plan_key")
     status = row.get("status")
-    cfg = PLAN_CONFIG.get(plan, {})
+    region = row.get("region") or REGION_INTL
+    cfg = get_plan(plan, region) or {}
 
     return SubscriptionStatusResponse(
         status=status,
@@ -325,8 +330,10 @@ async def get_my_subscription(user: dict = Depends(verify_clerk_token)):
         next_billing_date=row.get("next_billing_date"),
         trial_end=row.get("trial_end"),
         is_trialing=status == "trialing",
-        sessions_per_month=cfg.get("sessions_per_month", 0),
-        minutes_per_session=cfg.get("minutes_per_session", 0),
+        region=region,
+        currency=cfg.get("currency"),
+        amount=cfg.get("amount"),
+        period=cfg.get("period"),
     )
 
 
@@ -351,15 +358,107 @@ async def cancel_subscription(user: dict = Depends(verify_clerk_token)):
     return {"message": "Cancellation scheduled"}
 
 
+# ── 6. PAYMENT HISTORY ────────────────────────────────────────────────────────
+
+_CURRENCY_SYMBOL = {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£"}
+
+
+def _money(minor: Any, currency: str) -> str:
+    """Dodo stores minor units; render them the way the app displays prices."""
+    try:
+        amount = (int(minor) or 0) / 100
+    except (TypeError, ValueError):
+        amount = 0.0
+    sym = _CURRENCY_SYMBOL.get((currency or "").upper(), "")
+    return f"{sym}{amount:,.2f}"
+
+
+@router.get("/billing/payments")
+async def list_payments(user: dict = Depends(verify_clerk_token)):
+    """Payment history for the Subscription screen.
+
+    Read live from Dodo rather than mirrored into Supabase — receipts are Dodo's
+    record, and duplicating them means a second thing to keep in sync and reconcile.
+    """
+    user_id = user.get("user_id") or user.get("sub")
+
+    res = (
+        supabase.table("dodo_subscriptions")
+        .select("dodo_subscription_id, plan_key, region")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        return {"payments": []}
+
+    row = res.data[0]
+    sub_id = row.get("dodo_subscription_id")
+    if not sub_id:
+        return {"payments": []}
+
+    try:
+        resp = dodo._client.payments.list(subscription_id=sub_id)
+        items = list(getattr(resp, "items", None) or [])
+    except Exception:
+        # History is informational — never break the screen over it.
+        logger.warning("payment_history_unavailable", sub_id=sub_id, exc_info=True)
+        return {"payments": [], "unavailable": True}
+
+    plan_label = f"Lily Unlimited · {str(row.get('plan_key') or '').title()}"
+
+    payments = []
+    for p in items:
+        amount = getattr(p, "total_amount", None)
+        currency = str(getattr(p, "currency", "") or "")
+        status = str(getattr(p, "status", "") or "")
+        created = getattr(p, "created_at", None)
+        is_trial = (amount or 0) == 0
+
+        payments.append(
+            {
+                "id": str(getattr(p, "payment_id", "") or ""),
+                "date": str(created) if created else None,
+                "description": "3-day free trial" if is_trial else plan_label,
+                "amount": _money(amount, currency),
+                "amount_minor": amount,
+                "currency": currency,
+                "status": "Free" if is_trial else (status.title() or "Paid"),
+            }
+        )
+
+    return {"payments": payments}
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # WEBHOOK HANDLERS
 # ──────────────────────────────────────────────────────────────────────────────
 
 async def _on_subscription_activated(data: dict):
-    user_id = data.get("metadata", {}).get("user_id")
-    plan = data.get("metadata", {}).get("plan_key")
+    meta = data.get("metadata", {}) or {}
+    user_id = meta.get("user_id")
+    plan = meta.get("plan_key")
+    sold_region = meta.get("region") or REGION_INTL
     sub_id = data.get("subscription_id")
     next_billing = data.get("next_billing_date")
+
+    # The country the payment actually came from is the only authoritative signal —
+    # it arrives too late to pick the product, but it catches a client that lied about
+    # its region to reach the cheaper tier.
+    paid_country = DodoClient.billing_country(data)
+    paid_region = region_for_country(paid_country) if paid_country else None
+    if paid_region and paid_region != sold_region:
+        logger.warning(
+            "billing_region_mismatch",
+            sub_id=sub_id,
+            sold_region=sold_region,
+            paid_country=paid_country,
+            paid_region=paid_region,
+        )
+
+    region = paid_region or sold_region
+    plan_cfg = get_plan(str(plan), region) or {}
 
     # ── Detect trial via Dodo's workaround ───────────────────────────────────
     # Trial = exactly 1 payment exists AND its amount is 0
@@ -380,6 +479,10 @@ async def _on_subscription_activated(data: dict):
         "user_id": user_id,
         "dodo_subscription_id": sub_id,
         "plan_key": plan,
+        "region": region,
+        "currency": plan_cfg.get("currency"),
+        "amount": plan_cfg.get("amount"),
+        "region_source": "payment-country" if paid_region else "checkout-metadata",
         "status": "trialing" if is_trialing else "active",
         "expires_at": trial_end if is_trialing else next_billing,
         "next_billing_date": next_billing,

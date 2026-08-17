@@ -70,3 +70,7 @@ dmypy.json
 # Ignore the entire models folder to prevent accidental commitment of large model files
 models/*.onnx
 models/*
+
+# Secrets — never commit
+.encryption_key
+.env.*
