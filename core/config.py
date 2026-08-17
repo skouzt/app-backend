@@ -1,24 +1,21 @@
 from pydantic_settings import BaseSettings
-from typing import Optional
-from pydantic import ConfigDict 
+from pydantic import ConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = ConfigDict(           
+    # extra="allow" so an unrecognised .env key is ignored rather than fatal.
+    model_config = ConfigDict(
         env_file=".env",
-        extra="allow"
+        extra="allow",
     )
 
-    # --- Supabase ---
-    SUPABASE_URL: str = ""
-    SUPABASE_SERVICE_KEY: str = ""
-    
-    # --- Clerk ---
-    CLERK_SECRET_KEY: str = ""
-    CLERK_WEBHOOK_SECRET: str = ""
-    CLERK_JWT_ISSUER: Optional[str] = None
-    
-    # Dodo Payments
+    # Note: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are read directly from the
+    # environment in db/supabase.py, not through here — they must be present at
+    # import time, and a silent "" default would defer that failure to the first
+    # query. There was also a dead SUPABASE_SERVICE_KEY field here, differing from
+    # the real variable by one word and defaulting to empty.
+
+    # --- Dodo Payments ---
     DODO_PAYMENTS_API_KEY: str = ""
     DODO_WEBHOOK_SECRET: str = ""
     DODO_ENVIRONMENT: str = "test_mode"
@@ -29,12 +26,7 @@ class Settings(BaseSettings):
     # country — we don't need a product per currency.
     DODO_PRODUCT_MONTHLY: str = ""
     DODO_PRODUCT_YEARLY: str = ""
-    
-    # --- Application URLs ---
-    API_BASE_URL: str = "http://localhost:8000"
-    WEB_APP_URL: str = "http://localhost:3000"
-    APP_DEEP_LINK: str = "aletheia://"
-    
+
     # --- Chat LLM ---
     DEEPSEEK_API_KEY: str = ""
     # Pinned explicitly: "deepseek-chat" is a legacy alias that still resolves but
@@ -49,8 +41,6 @@ class Settings(BaseSettings):
     # token it had scraped. Set to a comma-separated origin list only when a real
     # web client exists.
     ALLOWED_ORIGINS: str = ""
-    
-    # ← class Config block deleted
 
 
 settings = Settings()
