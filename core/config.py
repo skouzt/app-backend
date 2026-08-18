@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from pydantic import ConfigDict
+from pydantic import ConfigDict, field_validator
 
 
 class Settings(BaseSettings):
@@ -41,6 +41,26 @@ class Settings(BaseSettings):
     # token it had scraped. Set to a comma-separated origin list only when a real
     # web client exists.
     ALLOWED_ORIGINS: str = ""
+
+    @field_validator("DODO_ENVIRONMENT")
+    @classmethod
+    def _check_dodo_environment(cls, v: str) -> str:
+        """Fail at import with a readable message, not deep inside a checkout.
+
+        `.env` once carried `DODO_ENVIRONMENT=test_mode  # change to live_mode`.
+        python-dotenv strips that trailing comment, so it ran fine locally, but
+        Docker's --env-file does not — the container got the comment as part of
+        the value and died with "Unknown environment" from inside the payments
+        SDK, several frames from anything naming the variable.
+        """
+        v = v.split("#")[0].strip()
+        if v not in ("test_mode", "live_mode"):
+            raise ValueError(
+                f"DODO_ENVIRONMENT must be 'test_mode' or 'live_mode', got {v!r}. "
+                "Check for an inline comment or stray whitespace in .env — Docker's "
+                "--env-file keeps everything after the '=' verbatim."
+            )
+        return v
 
 
 settings = Settings()

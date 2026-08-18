@@ -18,6 +18,11 @@ fastapi==0.115.8
 uvicorn[standard]==0.34.0
 httpx==0.28.1
 requests==2.32.5
+# Required by /chat/transcribe's UploadFile. FastAPI raises at import when a route
+# declares File() without this, so its absence killed the whole app, not just that
+# endpoint. It was present in the dev venv as a transitive install, so nothing failed
+# locally — only a clean build surfaced it.
+python-multipart==0.0.21
 
 # LLM
 openai==2.9.0

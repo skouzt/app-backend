@@ -13,12 +13,16 @@ ENV PIP_NO_CACHE_DIR=1
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
+# One COPY per package the app actually imports. `schemas/` used to be listed
+# here; it held the voice session models and was deleted with the rest of that
+# stack, but the COPY stayed and failed the build with "/schemas: not found".
+# A missing source is a hard error in Docker, so anything removed from the repo
+# has to come out of this list too.
 COPY api /app/api
 COPY config /app/config
 COPY core /app/core
 COPY db /app/db
 COPY services /app/services
-COPY schemas /app/schemas
 COPY prompts /app/prompts
 COPY main.py /app/main.py
 
