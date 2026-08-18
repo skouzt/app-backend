@@ -11,10 +11,8 @@ import hashlib
 import base64
 import os
 import time
-from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
-import dodopayments
 from dodopayments import DodoPayments
 
 from core.config import settings
@@ -23,7 +21,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 from core.billing.plans import get_product_id, is_valid_interval
-from core.billing.region import REGION_INTL, region_for_country
+from core.billing.region import REGION_INTL
 
 
 class DodoClient:

@@ -1,5 +1,4 @@
 from typing import List, Dict, Any, cast
-from supabase import Client
 from datetime import datetime
 
 from db.supabase import supabase
@@ -58,5 +57,5 @@ def fetch_recent_sessions(user_id: str, limit: int = 3) -> List[Dict[str, Any]]:
 
         return sessions
 
-    except Exception as e:
+    except Exception:
         return []

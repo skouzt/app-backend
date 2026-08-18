@@ -45,7 +45,7 @@ async def submit_onboarding(
             "email": payload.email,
         }
 
-        result = supabase.table("user_info").insert(form_data).execute()
+        supabase.table("user_info").insert(form_data).execute()
 
         return {"ok": True}
 

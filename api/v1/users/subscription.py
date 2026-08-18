@@ -45,7 +45,7 @@ async def get_my_subscription(user: dict = Depends(verify_clerk_token)):
             .limit(1)
             .execute()
         )
-    except Exception as e:
+    except Exception:
         logger.error("subscription_fetch_failed", extra={"user_id": clerk_id}, exc_info=True)
         raise HTTPException(
             status_code=500,

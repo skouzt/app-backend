@@ -14,7 +14,6 @@ more trust than several right ones earn.
 from __future__ import annotations
 
 import time
-from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 

@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional, TypedDict
+from typing import Any, Optional, TypedDict
 
-import dodopayments
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 import structlog
@@ -15,8 +14,10 @@ from core.security import verify_clerk_token
 from core.billing.dodo_client import DodoClient
 from core.billing.plans import TRIAL_DAYS, describe, get_plan, is_valid_interval
 from core.billing.region import (
-    REGION_INTL, is_trusted, region_for_country, resolve_billing_country,
-    resolve_billing_region,
+    REGION_INTL,
+    is_trusted,
+    region_for_country,
+    resolve_billing_country,
 )
 from db.supabase import supabase
 
