@@ -67,7 +67,21 @@ class DodoClient:
         # when the customer sets their real billing country, a mismatched card tends to
         # fail address verification, and the webhook logs billing_region_mismatch
         # against the country the payment actually came from.
-        seed_country = "IN" if region == "IN" else "US"
+        # Seed with the resolved country itself. This was `"IN" if region == "IN"
+        # else "US"`, written when pricing was a two-tier IN/INTL split. Once the
+        # catalogue grew to 109 countries that line silently broke every one of
+        # them: a GB customer was quoted £69.99 in the app, seeded as US, and shown
+        # $79.99 by Dodo — the display/charge mismatch this system exists to
+        # prevent, for everyone except India.
+        #
+        # "ZZ" is the catalogue's unknown-country marker and "INTL" the legacy tier
+        # name; both mean "no localized price", which is the base USD product, so
+        # they seed as US.
+        seed_country = (
+            region.upper()
+            if region and len(region) == 2 and region.isalpha() and region.upper() != "ZZ"
+            else "US"
+        )
 
         create_kwargs = {
             "billing": {
