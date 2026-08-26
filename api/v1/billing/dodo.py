@@ -20,6 +20,7 @@ from core.billing.region import (
     resolve_billing_country,
 )
 from db.supabase import supabase
+from services.subscription_service import get_subscription_state
 
 router = APIRouter()
 dodo   = DodoClient()
@@ -231,7 +232,14 @@ async def dodo_webhook(request: Request):
 async def check_and_activate_subscription(user: dict = Depends(verify_clerk_token)):
     user_id = user.get("user_id") or user.get("sub")
 
-    # STEP 1: already in DB (webhook already fired)
+    # STEP 1: an existing subscription that actually grants access.
+    #
+    # This used to short-circuit on the mere existence of a row, which made
+    # resubscribing impossible: a returning customer whose plan had lapsed hit this
+    # branch, got "already_activated" describing the dead row, and never reached
+    # step 2 — so their new checkout was never written. They could pay repeatedly
+    # and stay locked out. Whether the row grants access is the question, not
+    # whether it exists.
     existing = (
         supabase.table("dodo_subscriptions")
         .select("*")
@@ -239,7 +247,7 @@ async def check_and_activate_subscription(user: dict = Depends(verify_clerk_toke
         .execute()
     )
 
-    if existing.data:
+    if existing.data and get_subscription_state(user_id)["allowed"]:
         sub = existing.data[0]
         plan = sub.get("plan_key")
         status = sub.get("status")
@@ -253,6 +261,13 @@ async def check_and_activate_subscription(user: dict = Depends(verify_clerk_toke
             "trial_end": sub.get("trial_end"),
             **describe(plan, sub.get("region") or REGION_INTL),
         }
+
+    if existing.data:
+        logger.info(
+            "resubscribe_over_lapsed_row",
+            user_id=user_id,
+            old_status=existing.data[0].get("status"),
+        )
 
     # STEP 2: webhook hasn't fired yet — check pending
     pv = (
