@@ -23,6 +23,7 @@ from api.v1.billing.dodo import router as billing_router
 from api.v1.billing.pricing import router as pricing_router
 from api.v1.chat.messages import router as chat_router
 from api.v1.insights import router as insights_router
+from api.v1.notifications import router as notifications_router
 from api.v1.therapy.sessions import router as therapy_sessions_router
 from api.v1.usage import router as usage_router
 from api.v1.users.onboarding import router as onboarding_router
@@ -96,6 +97,7 @@ app.include_router(billing_router, prefix="/api/v1")
 app.include_router(pricing_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1")
 app.include_router(insights_router, prefix="/api/v1")
+app.include_router(notifications_router, prefix="/api/v1")
 
 
 @app.get("/health")
