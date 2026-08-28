@@ -26,6 +26,11 @@ COPY services /app/services
 COPY prompts /app/prompts
 COPY main.py /app/main.py
 
+# Operator tooling rather than something the server imports — send_push.py is
+# run by hand over `railway ssh`. Kept in a separate COPY so it is obvious this
+# one is not an application dependency.
+COPY scripts /app/scripts
+
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
