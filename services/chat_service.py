@@ -1,7 +1,7 @@
 """Chat: sessions, messages, and Lily's replies.
 
 Sessions are invisible to the client. A conversation starts on the first message and
-closes itself after IDLE_MINUTES of silence, at which point the reaper summarises it
+covers one local day, at which point the reaper summarises it
 so the *next* conversation opens with context. Nothing here is exposed as an endpoint —
 the app only ever sends and reads messages.
 """
@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 
 from db.supabase import supabase
+from services.user_info_service import fetch_user_info, local_today
 from prompts.lily_chat import build_chat_messages
 from services.llm import complete
 
@@ -24,7 +25,6 @@ from services.llm import complete
 # became its own permanent entry — and made the thread vanish while someone was still
 # thinking. A whole day was the other extreme: nothing gets summarised until the day
 # ends, so anything past HISTORY_TURNS is in neither the context window nor memory.
-IDLE_MINUTES = 30
 
 # How much of the thread to replay to the model. Older turns are represented by the
 # continuity block instead, so this stays bounded regardless of conversation length.
@@ -98,7 +98,7 @@ def _parse(value: Any) -> Optional[datetime]:
 def _fetch_active(user_id: str) -> Optional[Dict[str, Any]]:
     res = (
         supabase.table(TABLE_SESSIONS)
-        .select("id, started_at:start_time, last_message_at, message_count")
+        .select("id, started_at:start_time, last_message_at, message_count, date")
         .eq("user_id", user_id)
         .eq("status", "active")
         .limit(1)
@@ -114,12 +114,14 @@ def _mark_closing(session_id: str) -> None:
     ).eq("id", session_id).eq("status", "active").execute()
 
 
-def _create_session(user_id: str) -> Dict[str, Any]:
+def _create_session(user_id: str, on_date: Optional[str] = None) -> Dict[str, Any]:
     now = _now()
     row = {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
-        "date": now.date().isoformat(),
+        # The user's local day, not the server's. Sessions are day-scoped, so
+        # this value is the identity of the session, not a label on it.
+        "date": on_date or now.date().isoformat(),
         "status": "active",
         "start_time": _iso(now),
         "last_message_at": _iso(now),
@@ -132,18 +134,30 @@ def _create_session(user_id: str) -> Dict[str, Any]:
 
 
 def resolve_session(user_id: str) -> Dict[str, Any]:
-    """Return the session this message belongs to, closing a stale one if needed."""
+    """Return the session this message belongs to.
+
+    One session per local day, so a day yields exactly one summary. A gap in the
+    conversation no longer starts a new session: someone who writes at breakfast
+    and again at midnight is having one day, and reading that back as two
+    disconnected entries is not what a journal is for.
+
+    A session is only retired when the user's local date has moved on, which is
+    why the reaper's cutoff is a date rather than an idle window.
+    """
+    info = fetch_user_info(user_id) or {}
+    today = local_today(info.get("timezone")).isoformat()
+
     active = _fetch_active(user_id)
 
     if active:
-        last = _parse(active.get("last_message_at"))
-        if last and _now() - last <= timedelta(minutes=IDLE_MINUTES):
+        if str(active.get("date")) == today:
             return active
-        # Went quiet: retire it and start fresh.
+        # A new day began: close yesterday's so it can be summarised, and open
+        # today's.
         _mark_closing(str(active["id"]))
 
     try:
-        return _create_session(user_id)
+        return _create_session(user_id, on_date=today)
     except Exception as e:
         # The partial unique index means a concurrent send may have just created one.
         logger.warning(f"Session create raced, re-reading: {type(e).__name__}")

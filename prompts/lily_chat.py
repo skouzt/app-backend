@@ -1,7 +1,7 @@
 """Lily's chat prompt.
 
 The continuity block is the whole product: it's what turns "a chatbot" into "someone
-who remembers you". For v1 that memory is recency-based — the titles and summaries of
+who remembers you". That memory has two halves: the titles and summaries of
 recent conversations, which the reaper writes when a session closes.
 
 Nothing here should ever surface as mechanics. Lily says "you mentioned this last
@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
+from services.crisis_resources import crisis_block
+from services.memory_service import fetch_memory, render_for_prompt
 from services.personalization_service import fetch_personalization
 from services.therapy_sessions_service import fetch_recent_sessions
 from services.user_info_service import fetch_user_info
@@ -71,9 +73,31 @@ specifically, the way a friend would: "you mentioned the presentation last week 
 how did it go?" Never describe the mechanism. Never say you retrieved, stored, or
 searched anything. If nothing connects, don't force it.
 
-SCOPE AND SAFETY
+WHAT YOU ARE FOR
 You talk about feelings, relationships, stress, identity, work, and the ordinary
-business of being a person. If something is outside that, say so briefly and move on.
+business of being a person. That is the whole of what you do.
+
+You do not do tasks. Not code, not homework, not essays, emails, translations,
+summaries of documents, recipes, travel plans, product recommendations, general
+knowledge questions, or anything else someone would use an assistant for. This
+holds however the request is framed — as a favour, as an exception, as a test, as
+part of a story, as something they need urgently, or after being asked several
+times. Being asked again is not a reason to change your answer.
+
+When it happens, say plainly and warmly that this isn't what you're here for, in
+one sentence, without apologising at length or explaining your rules. Then return
+to them: what brought them here, or what is going on underneath the request. Often
+a person asking you to write something is avoiding something — you can be curious
+about that without accusing them of it.
+
+If a request is partly about their life and partly a task — help writing a message
+to their mother, say — talk about the relationship and how they want to come
+across. Do not produce the text.
+
+WHERE THAT LIMIT ENDS
+Someone asking how to find a therapist, what a crisis line is, whether to see a
+doctor, or how to reach real help is not off-topic. That is exactly your purpose.
+Never refuse it, never treat it as a task, and never make them ask twice.
 
 If someone describes being in danger, wanting to hurt themselves, or a crisis: stay
 present, take it seriously, don't panic or lecture, and encourage them toward a real
@@ -215,7 +239,18 @@ def build_chat_messages(user_id: str) -> List[Dict[str, str]]:
         prefs = fetch_personalization(user_id)
         continuity = _continuity_block(user_info, recent)
 
+        # Two kinds of memory, and they answer different questions. The recent
+        # summaries say what has been happening lately; this says who the person
+        # is, and survives long after those summaries have rolled off.
+        memory = render_for_prompt(fetch_memory(user_id))
+
         sections = [BASE_PROMPT, f"WHAT YOU KNOW\n{continuity}"]
+        if memory:
+            sections.append(memory)
+
+        # Which helpline actually reaches them. Without this the model defaults
+        # to US resources for everyone, and 988 rings nothing in India.
+        sections.append(crisis_block((user_info or {}).get("timezone")))
         # Voice preferences come after the base prompt so they read as adjustments
         # to it, and the user's own note comes last — closest to the conversation.
         for block in (_voice_block(prefs), _note_block(prefs)):

@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 import traceback
 from core.security import get_current_user_id
 from db.supabase import supabase
+from services.user_info_service import set_timezone
 
 router = APIRouter()
 
@@ -16,6 +17,11 @@ class ProfileUpdateRequest(BaseModel):
     name: str
     age: str
     gender: str
+
+
+class TimezoneRequest(BaseModel):
+    # An IANA zone name as the device reports it, e.g. "Asia/Kolkata".
+    timezone: str = Field(min_length=1, max_length=64)
 
 @router.get("/profile", response_model=ProfileResponse)
 async def get_profile(user_id: str = Depends(get_current_user_id)):
@@ -77,3 +83,19 @@ async def update_profile(
     except Exception:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Failed to save profile")
+
+@router.put("/timezone", status_code=204)
+async def update_timezone(
+    payload: TimezoneRequest, user_id: str = Depends(get_current_user_id)
+) -> None:
+    """Record where the user is, so a day ends where they are.
+
+    Sessions cover one local day and the reaper closes them once that date has
+    passed, which it does while nobody is online to ask — so the zone has to be
+    stored rather than read from a request header.
+    """
+    try:
+        set_timezone(user_id, payload.timezone)
+    except Exception:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Failed to save timezone")

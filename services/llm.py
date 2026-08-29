@@ -83,14 +83,25 @@ async def complete_json(
     messages: List[Dict[str, str]],
     *,
     temperature: float = 0.3,
-    max_tokens: int = 500,
+    # Matches `complete` for the same reason: this model reasons before it
+    # answers and both come out of one budget. At 500 a long transcript could
+    # spend the whole allowance thinking and return a truncated object, which
+    # fails to parse — and every caller here treats a parse failure as "no
+    # result", so the symptom was a generic fallback summary rather than an
+    # error. Headroom costs nothing: billing is on tokens produced.
+    max_tokens: int = 1500,
 ) -> Dict[str, Any]:
     """Completion that must parse as a JSON object. Models fence it more often than not."""
     raw = await complete(messages, temperature=temperature, max_tokens=max_tokens)
     try:
         parsed = json.loads(_strip_fence(raw))
     except json.JSONDecodeError as e:
-        logger.warning(f"LLM returned non-JSON: {raw[:200]!r}")
+        # Length is in the message because truncation and malformed output look
+        # identical otherwise, and they have different fixes: one is the token
+        # budget, the other is the prompt.
+        logger.warning(
+            f"LLM returned non-JSON ({len(raw)} chars, max_tokens may be too low): {raw[:200]!r}"
+        )
         raise ValueError("LLM did not return valid JSON") from e
     if not isinstance(parsed, dict):
         raise ValueError("LLM returned JSON but not an object")
