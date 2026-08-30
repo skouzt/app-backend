@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any, Optional, TypedDict
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel
 import structlog
 
@@ -20,6 +20,7 @@ from core.billing.region import (
     resolve_billing_country,
 )
 from db.supabase import supabase
+from services.push_service import send_to_user
 from services.subscription_service import get_subscription_state
 
 router = APIRouter()
@@ -176,7 +177,7 @@ async def create_dodo_checkout(
 # ── 2. WEBHOOK ────────────────────────────────────────────────────────────────
 
 @router.post("/billing/dodo/webhook")
-async def dodo_webhook(request: Request):
+async def dodo_webhook(request: Request, background: BackgroundTasks):
     raw_body = await request.body()
 
     h = {k.lower(): v for k, v in request.headers.items()}
@@ -206,13 +207,16 @@ async def dodo_webhook(request: Request):
     data = payload.get("data", {})
 
     if event_type in ("subscription.active", "subscription.created"):
-        await _on_subscription_activated(data)
+        await _on_subscription_activated(data, background)
 
     elif event_type == "subscription.renewed":
+        # Deliberately silent. A renewal is the absence of news, and a monthly
+        # "we charged you" push is the kind of thing people disable the whole
+        # notification channel over.
         await _on_subscription_renewed(data)
 
     elif event_type == "subscription.cancelled":
-        await _on_subscription_cancelled(data)
+        await _on_subscription_cancelled(data, background)
 
     elif event_type == "subscription.expired":
         await _on_subscription_expired(data)
@@ -448,10 +452,66 @@ async def list_payments(user: dict = Depends(verify_clerk_token)):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# BILLING NOTIFICATIONS
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# These run as background tasks, after the webhook has already answered Dodo.
+# Sending inline would add the Expo round-trip plus the five-second wait for
+# delivery receipts to every billing webhook, which is long enough for Dodo to
+# time out and mark the endpoint unhealthy.
+#
+# Devices that have notifications switched off are filtered out by
+# active_tokens(), so the Settings toggle governs these the same as any other.
+
+
+def _subscription_row(sub_id: str) -> dict:
+    """The stored row for a Dodo subscription.
+
+    Cancellation and expiry webhooks carry only the subscription id — the
+    user_id lives in checkout metadata, which is on the activation event alone.
+    """
+    res = (
+        supabase.table("dodo_subscriptions")
+        .select("user_id, status, expires_at")
+        .eq("dodo_subscription_id", sub_id)
+        .limit(1)
+        .execute()
+    )
+    return (res.data or [{}])[0]
+
+
+def _format_date(raw: Any) -> Optional[str]:
+    """An ISO timestamp as "12 September", or None if it is unparseable."""
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    # Not %-d: that directive is platform-specific and would raise on Windows.
+    return f"{dt.day} {dt:%B}"
+
+
+async def _notify(user_id: Optional[str], title: str, body: str) -> None:
+    """Push a billing update, swallowing every failure.
+
+    A notification is the least important thing happening in this webhook. If
+    Expo is down, the subscription state has still been recorded correctly and
+    nothing here should surface as a failed webhook.
+    """
+    if not user_id:
+        return
+    try:
+        await send_to_user(user_id, title=title, body=body, data={"type": "billing"})
+    except Exception as e:
+        logger.warning("billing_push_failed", user_id=user_id, error=type(e).__name__)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # WEBHOOK HANDLERS
 # ──────────────────────────────────────────────────────────────────────────────
 
-async def _on_subscription_activated(data: dict):
+async def _on_subscription_activated(data: dict, background: Optional[BackgroundTasks] = None):
     meta = data.get("metadata", {}) or {}
     user_id = meta.get("user_id")
     plan = meta.get("plan_key")
@@ -491,6 +551,12 @@ async def _on_subscription_activated(data: dict):
     except Exception:
         logger.warning("trial_payment_check_failed", sub_id=sub_id)
 
+    # Dodo sends both subscription.created and subscription.active for the same
+    # purchase, and they carry different event ids — so the idempotency guard on
+    # the webhook does not collapse them. Notify only on the transition into a
+    # paid state, or the user is congratulated twice for buying once.
+    was_live = _subscription_row(sub_id).get("status") in ("active", "trialing")
+
     _upsert_subscription(user_id, {
         "user_id": user_id,
         "dodo_subscription_id": sub_id,
@@ -511,6 +577,25 @@ async def _on_subscription_activated(data: dict):
         .eq("dodo_subscription_id", sub_id)\
         .execute()
 
+    if background is None or was_live:
+        return
+
+    if is_trialing:
+        until = _format_date(trial_end)
+        body = (
+            f"You have everything until {until}. No rush — talk when you're ready."
+            if until
+            else "You have everything for now. No rush — talk when you're ready."
+        )
+        background.add_task(_notify, user_id, "Your trial has started", body)
+    else:
+        background.add_task(
+            _notify,
+            user_id,
+            "You're all set",
+            "Your subscription is active. I'm here whenever you want to talk.",
+        )
+
 
 async def _on_subscription_renewed(data: dict):
     sub_id = data.get("subscription_id")
@@ -525,12 +610,33 @@ async def _on_subscription_renewed(data: dict):
     }).eq("dodo_subscription_id", sub_id).execute()
 
 
-async def _on_subscription_cancelled(data: dict):
+async def _on_subscription_cancelled(data: dict, background: Optional[BackgroundTasks] = None):
     sub_id = data.get("subscription_id")
+
+    # Read before the update: this is the only place the user_id and the paid-up
+    # date are available, and the write below would not change them anyway.
+    row = _subscription_row(sub_id)
 
     supabase.table("dodo_subscriptions").update({
         "status": "cancelled",
     }).eq("dodo_subscription_id", sub_id).execute()
+
+    if background is None or row.get("status") == "cancelled":
+        return
+
+    # Cancellation is scheduled, not immediate — /billing/cancel-subscription
+    # answers "Cancellation scheduled" and access runs to the end of the paid
+    # period, with a separate subscription.expired event when it actually ends.
+    # Telling someone their access has stopped while they can still use the app
+    # would be wrong, so the date does the work.
+    until = _format_date(row.get("expires_at"))
+    body = (
+        f"You'll have full access until {until}. I'll be here if you come back."
+        if until
+        else "You'll keep full access until the end of your billing period. "
+        "I'll be here if you come back."
+    )
+    background.add_task(_notify, row.get("user_id"), "Subscription cancelled", body)
 
 
 async def _on_subscription_expired(data: dict):
