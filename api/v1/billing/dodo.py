@@ -176,6 +176,20 @@ async def create_dodo_checkout(
 
 # ── 2. WEBHOOK ────────────────────────────────────────────────────────────────
 
+def _is_duplicate(exc: Exception) -> bool:
+    """Whether a failed insert was a primary-key collision.
+
+    23505 is Postgres' unique_violation. It is matched on the message as well
+    as the attribute because postgrest-py has moved the code between an
+    attribute and a dict across versions, and mistaking a collision for a real
+    outage would 500 on an event that was already handled correctly.
+    """
+    if getattr(exc, "code", None) == "23505":
+        return True
+    text = str(exc).lower()
+    return "23505" in text or "duplicate key" in text
+
+
 @router.post("/billing/dodo/webhook")
 async def dodo_webhook(request: Request, background: BackgroundTasks):
     raw_body = await request.body()
@@ -195,37 +209,62 @@ async def dodo_webhook(request: Request, background: BackgroundTasks):
 
     payload = json.loads(raw_body)
 
-    # ✅ IDEMPOTENCY
+    # ── Idempotency ───────────────────────────────────────────────────────────
+    # The insert *is* the claim. id is the primary key, so a redelivery arriving
+    # while the first is still in flight loses the race inside the database —
+    # a select-then-insert could interleave and let both through.
     event_id = payload.get("id")
+    claimed = False
+
     if event_id:
-        exists = supabase.table("webhook_events").select("id").eq("id", event_id).execute()
-        if exists.data:
+        try:
+            supabase.table("webhook_events").insert({"id": event_id}).execute()
+            claimed = True
+        except Exception as e:
+            if not _is_duplicate(e):
+                raise
             return {"received": True}
-        supabase.table("webhook_events").insert({"id": event_id}).execute()
 
     event_type = payload.get("type")
     data = payload.get("data", {})
 
-    if event_type in ("subscription.active", "subscription.created"):
-        await _on_subscription_activated(data, background)
+    try:
+        if event_type in ("subscription.active", "subscription.created"):
+            await _on_subscription_activated(data, background)
 
-    elif event_type == "subscription.renewed":
-        # Deliberately silent. A renewal is the absence of news, and a monthly
-        # "we charged you" push is the kind of thing people disable the whole
-        # notification channel over.
-        await _on_subscription_renewed(data)
+        elif event_type == "subscription.renewed":
+            # Deliberately silent. A renewal is the absence of news, and a
+            # monthly "we charged you" push is the kind of thing people disable
+            # the whole notification channel over.
+            await _on_subscription_renewed(data)
 
-    elif event_type == "subscription.cancelled":
-        await _on_subscription_cancelled(data, background)
+        elif event_type == "subscription.cancelled":
+            await _on_subscription_cancelled(data, background)
 
-    elif event_type == "subscription.expired":
-        await _on_subscription_expired(data)
+        elif event_type == "subscription.expired":
+            await _on_subscription_expired(data)
 
-    elif event_type in ("subscription.failed", "subscription.past_due"):
-        await _on_subscription_failed(data)
+        elif event_type in ("subscription.failed", "subscription.past_due"):
+            await _on_subscription_failed(data)
 
-    elif event_type == "subscription.on_hold":
-        await _on_subscription_failed(data)  # treat on_hold same as past_due
+        elif event_type == "subscription.on_hold":
+            await _on_subscription_failed(data)  # treat on_hold same as past_due
+
+    except Exception:
+        # Release the claim so Dodo's retry is allowed to run.
+        #
+        # Previously the claim was written before dispatch and never withdrawn,
+        # so any handler failure was permanent: Dodo retried, the guard saw the
+        # event id and returned early, and the event was dropped. On
+        # subscription.active that is a paid subscription the database never
+        # hears about.
+        if claimed:
+            try:
+                supabase.table("webhook_events").delete().eq("id", event_id).execute()
+            except Exception:
+                logger.error("webhook_claim_release_failed", event_id=event_id)
+        logger.exception("webhook_handler_failed", event_id=event_id, event_type=event_type)
+        raise
 
     return {"received": True}
 
