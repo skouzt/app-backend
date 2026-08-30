@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, TypedDict
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
@@ -176,6 +176,70 @@ async def create_dodo_checkout(
 
 # ── 2. WEBHOOK ────────────────────────────────────────────────────────────────
 
+# How long a claim may sit unfinished before another delivery may take it over.
+# Handlers complete in seconds, so this only ever elapses when the process
+# holding the claim died. Set well above any legitimate run: reclaiming an event
+# that is merely slow would process it twice.
+CLAIM_STALE_AFTER = timedelta(minutes=15)
+
+
+def _claim_event(event_id: str) -> bool:
+    """Take ownership of an event. True if this request should handle it.
+
+    Raises 503 when another worker holds a live claim. That is deliberate — a
+    2xx tells the provider the event was delivered and stops redelivery, so if
+    the holder then died the event would be lost with no further attempts. A
+    non-2xx keeps it in the retry schedule, and by the time it comes back the
+    claim is either finished or stale enough to take over.
+    """
+    now = datetime.now(timezone.utc)
+
+    try:
+        supabase.table("webhook_events").insert(
+            {"id": event_id, "status": "processing", "claimed_at": now.isoformat()}
+        ).execute()
+        return True
+    except Exception as e:
+        if not _is_duplicate(e):
+            raise
+
+    existing = (
+        supabase.table("webhook_events")
+        .select("status")
+        .eq("id", event_id)
+        .limit(1)
+        .execute()
+    )
+    if (existing.data or [{}])[0].get("status") == "done":
+        return False
+
+    # Reclaim, but only if the row still carries the old timestamp. Doing the
+    # staleness test inside the UPDATE rather than in Python means two workers
+    # reclaiming at once cannot both win: the second matches no rows.
+    cutoff = (now - CLAIM_STALE_AFTER).isoformat()
+    retaken = (
+        supabase.table("webhook_events")
+        .update({"status": "processing", "claimed_at": now.isoformat()})
+        .eq("id", event_id)
+        .eq("status", "processing")
+        .lt("claimed_at", cutoff)
+        .execute()
+    )
+
+    if not retaken.data:
+        raise HTTPException(503, "Event already in flight; retry shortly")
+
+    logger.warning("webhook_claim_reclaimed", event_id=event_id)
+    return True
+
+
+def _complete_event(event_id: str) -> None:
+    """Mark a claim finished so redeliveries are recognised as duplicates."""
+    supabase.table("webhook_events").update({"status": "done"}).eq(
+        "id", event_id
+    ).execute()
+
+
 def _is_duplicate(exc: Exception) -> bool:
     """Whether a failed insert was a primary-key collision.
 
@@ -217,13 +281,9 @@ async def dodo_webhook(request: Request, background: BackgroundTasks):
     claimed = False
 
     if event_id:
-        try:
-            supabase.table("webhook_events").insert({"id": event_id}).execute()
-            claimed = True
-        except Exception as e:
-            if not _is_duplicate(e):
-                raise
+        if not _claim_event(event_id):
             return {"received": True}
+        claimed = True
 
     event_type = payload.get("type")
     data = payload.get("data", {})
@@ -265,6 +325,12 @@ async def dodo_webhook(request: Request, background: BackgroundTasks):
                 logger.error("webhook_claim_release_failed", event_id=event_id)
         logger.exception("webhook_handler_failed", event_id=event_id, event_type=event_type)
         raise
+
+    if claimed:
+        # Only now is the event genuinely handled. Until this lands the row
+        # stays 'processing', so a crash anywhere above leaves a claim that a
+        # later redelivery can take over rather than mistake for a duplicate.
+        _complete_event(event_id)
 
     return {"received": True}
 
