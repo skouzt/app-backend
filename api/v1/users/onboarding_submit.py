@@ -45,7 +45,13 @@ async def submit_onboarding(
             "email": payload.email,
         }
 
-        supabase.table("user_info").insert(form_data).execute()
+        # Upsert, not insert. Onboarding is re-run more often than it looks —
+        # after a failed status check, a reinstall, or a double tap on Finish —
+        # and inserting left a second row each time. Since fetch_user_info()
+        # reads with limit(1), a duplicate meant Lily could pick up whichever
+        # row Postgres happened to return, including answers the user replaced.
+        # Columns absent here (timezone) are left untouched by the update.
+        supabase.table("user_info").upsert(form_data, on_conflict="user_id").execute()
 
         return {"ok": True}
 

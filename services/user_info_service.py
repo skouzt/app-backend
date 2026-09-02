@@ -13,6 +13,12 @@ def fetch_user_info(user_id: str) -> Optional[Dict[str, Any]]:
         .table("user_info")
         .select("*")  # Fetch all columns
         .eq("user_id", user_id)
+        # Newest first. A unique constraint on user_id now makes duplicates
+        # impossible, but limit(1) without an order was how a user who
+        # re-onboarded could be greeted by the name they had replaced — an
+        # unordered select may return either row. Ordering costs nothing and
+        # keeps this correct regardless of what the table holds.
+        .order("created_at", desc=True)
         .limit(1)
         .execute()
     )
