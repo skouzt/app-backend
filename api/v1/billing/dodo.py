@@ -78,13 +78,17 @@ class SubscriptionStatusResponse(BaseModel):
 
 async def _get_user_email(user: dict, user_id: str) -> Optional[str]:
     email = user.get("email")
-    if email:
-        return str(email)
 
-    res = supabase.table("user_info").select("email").eq("user_id", user_id).execute()
-    if res.data and isinstance(res.data[0], dict):
-        return str(res.data[0].get("email", ""))
-    return None
+    if not email:
+        res = supabase.table("user_info").select("email").eq("user_id", user_id).execute()
+        if res.data and isinstance(res.data[0], dict):
+            email = res.data[0].get("email")
+
+    # str() only after the truth test. .get("email", "") returns None when the
+    # column is NULL — a default never fires for a key that is present — and
+    # str(None) is "None": a truthy string that passed the caller's guard and
+    # went to Dodo, which 400'd it and turned every such checkout into a 502.
+    return str(email) if email else None
 
 
 def _upsert_subscription(user_id: str, payload: dict) -> None:

@@ -49,6 +49,9 @@ jobs:
           pip install --quiet -r requirements.txt pyflakes
           pyflakes api core db services prompts config main.py
 
+      - name: Billing email never stringifies None
+        run: python scripts/check_billing_email.py
+
       - name: Price catalogue is valid
         # Catches the decimal-place class of error: a zero-decimal currency written
         # as if it had cents is a 100x overcharge that looks like a normal integer.
