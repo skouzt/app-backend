@@ -50,6 +50,14 @@ jobs:
           pyflakes api core db services prompts config main.py
 
       - name: Billing email never stringifies None
+        # Importing the router pulls in config that refuses to load unset. Same
+        # dummy values the image job uses; nothing here talks to either service.
+        env:
+          SUPABASE_URL: https://example.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: dummy
+          CLERK_JWT_ISSUER: https://clerk.aletheia-ai.space
+          CLERK_JWT_AUDIENCE: backend-api
+          DODO_ENVIRONMENT: test_mode
         run: python scripts/check_billing_email.py
 
       - name: Price catalogue is valid
