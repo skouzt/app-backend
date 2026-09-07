@@ -45,6 +45,13 @@ async def submit_onboarding(
             "email": payload.email,
         }
 
+        # Trim here, not just in the app. This is the trust boundary every client
+        # version routes through, including builds already installed that will
+        # never be updated — OTA is disabled, so the April app is still sending.
+        # Eight stored names carry stray whitespace, which is how one user ended
+        # up as both "Rashid" and "Rashid ".
+        form_data = {k: v.strip() if isinstance(v, str) else v for k, v in form_data.items()}
+
         # Upsert, not insert. Onboarding is re-run more often than it looks —
         # after a failed status check, a reinstall, or a double tap on Finish —
         # and inserting left a second row each time. Since fetch_user_info()
