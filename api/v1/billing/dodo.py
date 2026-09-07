@@ -281,7 +281,12 @@ async def dodo_webhook(request: Request, background: BackgroundTasks):
     # The insert *is* the claim. id is the primary key, so a redelivery arriving
     # while the first is still in flight loses the race inside the database —
     # a select-then-insert could interleave and let both through.
-    event_id = payload.get("id")
+    # Standard Webhooks carries the unique message id in the webhook-id header —
+    # the same value already verified in the signature above — not in the body.
+    # This read payload["id"], which Dodo does not send, so event_id was always
+    # None and the whole claim below was skipped: webhook_events stayed empty
+    # while handlers ran anyway, leaving redeliveries free to reprocess.
+    event_id = h.get("webhook-id") or payload.get("id")
     claimed = False
 
     if event_id:
