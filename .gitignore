@@ -74,3 +74,7 @@ models/*
 # Secrets — never commit
 .encryption_key
 .env.*
+
+# Generated admin dashboard — carries names, emails and Safety_Check answers
+# (self-harm disclosures) inlined into the HTML. Build it locally, never commit it.
+lily-dashboard.html

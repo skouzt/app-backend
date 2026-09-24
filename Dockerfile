@@ -26,6 +26,10 @@ COPY services /app/services
 COPY prompts /app/prompts
 COPY main.py /app/main.py
 
+# The admin dashboard markup is rendered by api/v1/admin.py, so it is
+# application code rather than operator tooling.
+COPY templates /app/templates
+
 # Operator tooling rather than something the server imports — send_push.py is
 # run by hand over `railway ssh`. Kept in a separate COPY so it is obvious this
 # one is not an application dependency.

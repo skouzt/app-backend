@@ -19,6 +19,7 @@ from loguru import logger
 from core.config import settings
 from services.session_reaper import run_reaper
 
+from api.v1.admin import router as admin_router
 from api.v1.billing.dodo import router as billing_router
 from api.v1.billing.pricing import router as pricing_router
 from api.v1.chat.messages import router as chat_router
@@ -85,6 +86,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mounted at the root, not under /api/v1 — it serves pages, not API.
+app.include_router(admin_router)
 
 app.include_router(user_subscription_router, prefix="/api/v1")
 app.include_router(onboarding_router, prefix="/api/v1/users")

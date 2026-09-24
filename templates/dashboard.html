@@ -1,0 +1,1096 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lily Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* shadcn neutral tokens, sampled from the reference dashboard. */
+:root{
+  --background:#FFFFFF; --foreground:#0A0A0A;
+  --card:#FFFFFF; --card-foreground:#0A0A0A;
+  --muted:#F5F5F5; --muted-foreground:#737373;
+  --accent:#F5F5F5; --accent-foreground:#171717;
+  --border:#E5E5E5; --input:#E5E5E5; --ring:#A1A1A1;
+  --primary:#171717; --primary-foreground:#FAFAFA;
+  --sidebar:#FAFAFA; --sidebar-border:#E5E5E5;
+  --chart-1:#D4D4D4; --chart-2:#737373;
+  --success:#16A34A; --warning:#CA8A04; --danger:#DC2626; --info:#2563EB;
+  --radius:10px;
+  --shadow-xs:0 1px 2px 0 rgb(0 0 0 / .05);
+}
+html[data-theme="dark"]{
+  --background:#0A0A0A; --foreground:#FAFAFA;
+  --card:#171717; --card-foreground:#FAFAFA;
+  --muted:#262626; --muted-foreground:#A1A1A1;
+  --accent:#262626; --accent-foreground:#FAFAFA;
+  --border:#2A2A2A; --input:#2A2A2A; --ring:#525252;
+  --primary:#FAFAFA; --primary-foreground:#171717;
+  --sidebar:#171717; --sidebar-border:#2A2A2A;
+  --chart-1:#525252; --chart-2:#A1A1A1;
+  --success:#4ADE80; --warning:#FACC15; --danger:#F87171; --info:#60A5FA;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--background);color:var(--foreground);
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased;
+}
+button,input,select{font:inherit;color:inherit}
+button{background:none;border:none;padding:0;cursor:pointer}
+:focus-visible{outline:2px solid var(--ring);outline-offset:1px;border-radius:6px}
+svg{flex:none}
+.num{font-variant-numeric:tabular-nums}
+[hidden]{display:none !important}
+
+/* ── Layout ─────────────────────────────────────────── */
+.layout{display:flex;min-height:100%}
+.sidebar{
+  width:256px;flex:none;background:var(--sidebar);
+  border-right:1px solid var(--sidebar-border);
+  display:flex;flex-direction:column;position:sticky;top:0;height:100vh;
+  transition:width .16s ease;
+}
+.layout[data-collapsed="true"] .sidebar{width:52px}
+.layout[data-collapsed="true"] .sb-label,
+.layout[data-collapsed="true"] .sb-group-label,
+.layout[data-collapsed="true"] .sb-count,
+.layout[data-collapsed="true"] .sb-user-meta{display:none}
+.layout[data-collapsed="true"] .sb-item{justify-content:center;padding:6px}
+.layout[data-collapsed="true"] .sb-brand span{display:none}
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+
+/* ── Sidebar ────────────────────────────────────────── */
+.sb-brand{
+  height:48px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;
+  font-weight:600;font-size:14px;border-bottom:1px solid var(--sidebar-border);
+}
+.sb-brand i{
+  width:24px;height:24px;border-radius:6px;background:var(--primary);color:var(--primary-foreground);
+  display:grid;place-items:center;font-style:normal;font-size:11px;font-weight:600;flex:none;
+}
+.sb-scroll{flex:1;overflow-y:auto;padding:8px}
+.sb-group+.sb-group{margin-top:12px}
+.sb-group-label{
+  font-size:11px;font-weight:500;color:var(--muted-foreground);
+  padding:4px 8px;letter-spacing:.01em;
+}
+.sb-item{
+  display:flex;align-items:center;gap:8px;width:100%;height:32px;padding:6px 8px;
+  border-radius:8px;font-size:14px;color:var(--foreground);
+  transition:background .1s;text-align:left;
+}
+.sb-item:hover{background:var(--accent)}
+.sb-item[aria-current="page"]{background:var(--accent);font-weight:500}
+.sb-item svg{width:16px;height:16px;color:var(--muted-foreground)}
+.sb-item[aria-current="page"] svg{color:var(--foreground)}
+.sb-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-count{font-size:12px;color:var(--muted-foreground);font-variant-numeric:tabular-nums}
+.sb-foot{flex:none;border-top:1px solid var(--sidebar-border);padding:8px}
+.sb-user{display:flex;align-items:center;gap:8px;width:100%;padding:6px;border-radius:8px}
+.sb-user:hover{background:var(--accent)}
+.sb-user i{
+  width:24px;height:24px;border-radius:6px;background:var(--muted);color:var(--muted-foreground);
+  display:grid;place-items:center;font-style:normal;font-size:10px;font-weight:600;flex:none;
+}
+.sb-user-meta{min-width:0;text-align:left}
+.sb-user-meta b{display:block;font-size:12.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-user-meta span{display:block;font-size:11.5px;color:var(--muted-foreground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ── Header ─────────────────────────────────────────── */
+.topbar{
+  height:49px;flex:none;display:flex;align-items:center;gap:8px;padding:0 16px;
+  border-bottom:1px solid var(--border);background:var(--background);
+  position:sticky;top:0;z-index:20;
+}
+.icon-btn{
+  width:28px;height:28px;border-radius:8px;display:grid;place-items:center;
+  color:var(--muted-foreground);transition:background .1s,color .1s;
+}
+.icon-btn:hover{background:var(--accent);color:var(--foreground)}
+.icon-btn svg{width:16px;height:16px}
+.sep{width:1px;height:16px;background:var(--border);flex:none}
+.crumb{font-size:14px;font-weight:500}
+.crumb em{font-style:normal;color:var(--muted-foreground);font-weight:400}
+.top-spacer{flex:1}
+.search{position:relative;width:200px}
+.search svg{position:absolute;left:8px;top:50%;transform:translateY(-50%);width:14px;height:14px;color:var(--muted-foreground)}
+.search input{
+  width:100%;height:32px;padding:0 10px 0 28px;border:1px solid var(--input);border-radius:8px;
+  background:var(--background);font-size:13px;
+}
+.search input::placeholder{color:var(--muted-foreground)}
+.search input:focus{outline:none;border-color:var(--ring)}
+@media (max-width:900px){.search{display:none}}
+
+/* ── Page ───────────────────────────────────────────── */
+.content{padding:16px;display:flex;flex-direction:column;gap:16px;max-width:1400px;width:100%}
+.page-head h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-.01em}
+.page-head p{margin:2px 0 0;font-size:14px;color:var(--muted-foreground)}
+.head-row{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap}
+
+/* ── Card ───────────────────────────────────────────── */
+.card{
+  background:var(--card);color:var(--card-foreground);
+  border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow-xs);
+}
+.card-header{padding:16px 24px 0;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.card-header.b{padding-bottom:16px;border-bottom:1px solid var(--border)}
+.card-title{font-size:14px;font-weight:500;margin:0}
+.card-desc{font-size:14px;color:var(--muted-foreground);margin:2px 0 0}
+
+/* ── KPI ────────────────────────────────────────────── */
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
+@media (max-width:1100px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:560px){.kpis{grid-template-columns:1fr}}
+.kpi{padding:16px 24px;display:flex;flex-direction:column;gap:6px}
+.kpi-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.kpi-label{font-size:14px;color:var(--muted-foreground)}
+.kpi-value{font-size:30px;font-weight:600;letter-spacing:-.02em;line-height:1.1;font-variant-numeric:tabular-nums}
+.kpi-foot{font-size:13px;font-weight:500;display:flex;align-items:center;gap:4px}
+.kpi-foot svg{width:14px;height:14px}
+.kpi-sub{font-size:13px;color:var(--muted-foreground)}
+
+/* ── Badge ──────────────────────────────────────────── */
+.badge{
+  display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:26px;
+  font-size:12px;font-weight:500;border:1px solid var(--border);
+  color:var(--foreground);background:transparent;white-space:nowrap;
+}
+.badge svg{width:11px;height:11px}
+.badge-success{color:var(--success);border-color:color-mix(in srgb,var(--success) 30%,transparent)}
+.badge-warning{color:var(--warning);border-color:color-mix(in srgb,var(--warning) 30%,transparent)}
+.badge-danger{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 35%,transparent)}
+.badge-info{color:var(--info);border-color:color-mix(in srgb,var(--info) 30%,transparent)}
+.badge-muted{color:var(--muted-foreground)}
+
+/* ── Toggle group / tabs ────────────────────────────── */
+.toggle-group{display:inline-flex;border:1px solid var(--input);border-radius:8px;overflow:hidden}
+.toggle-group button{
+  height:36px;padding:0 12px;font-size:13px;color:var(--muted-foreground);
+  border-left:1px solid var(--input);transition:background .1s,color .1s;
+}
+.toggle-group button:first-child{border-left:none}
+.toggle-group button:hover{background:var(--accent);color:var(--foreground)}
+.toggle-group button[aria-pressed="true"]{background:var(--accent);color:var(--foreground);font-weight:500}
+.tabs{display:inline-flex;height:36px;padding:3px;background:var(--muted);border-radius:10px;gap:2px}
+.tabs button{
+  padding:0 12px;border-radius:7px;font-size:13px;color:var(--muted-foreground);transition:background .1s,color .1s;
+}
+.tabs button[aria-selected="true"]{background:var(--background);color:var(--foreground);font-weight:500;box-shadow:var(--shadow-xs)}
+
+/* ── Chart ──────────────────────────────────────────── */
+.chart-body{padding:12px 24px 16px}
+.chart-body svg{display:block;width:100%;height:230px;overflow:visible}
+.grid-line{stroke:var(--border)}
+.axis-text{fill:var(--muted-foreground);font-size:11px}
+.legend{display:flex;gap:14px;padding:0 24px 12px;font-size:12.5px;color:var(--muted-foreground)}
+.legend i{width:9px;height:9px;border-radius:2px;display:inline-block;margin-right:5px;font-style:normal}
+.tip{
+  position:fixed;pointer-events:none;z-index:60;background:var(--background);
+  border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 12px rgb(0 0 0 / .08);
+  padding:8px 10px;font-size:12px;min-width:132px;
+}
+.tip b{display:block;font-size:12px;font-weight:500;margin-bottom:5px}
+.tip div{display:flex;align-items:center;justify-content:space-between;gap:14px;color:var(--muted-foreground)}
+.tip div span{color:var(--foreground);font-variant-numeric:tabular-nums}
+
+/* ── Toolbar ────────────────────────────────────────── */
+.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--border)}
+.input{height:32px;padding:0 10px;border:1px solid var(--input);border-radius:8px;background:var(--background);font-size:13px}
+.input::placeholder{color:var(--muted-foreground)}
+.input:focus{outline:none;border-color:var(--ring)}
+.select{
+  height:32px;padding:0 26px 0 10px;border:1px solid var(--input);border-radius:8px;
+  background:var(--background);font-size:13px;cursor:pointer;
+  appearance:none;
+  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23737373' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 7px center;background-size:13px;
+}
+.btn{
+  height:32px;padding:0 12px;border:1px solid var(--input);border-radius:8px;background:var(--background);
+  font-size:13px;display:inline-flex;align-items:center;gap:6px;transition:background .1s;
+}
+.btn:hover{background:var(--accent)}
+.btn svg{width:14px;height:14px}
+.btn:disabled{opacity:.5;cursor:default}
+.btn-primary{background:var(--primary);color:var(--primary-foreground);border-color:var(--primary)}
+.btn-primary:hover{opacity:.9;background:var(--primary)}
+.menu-wrap{position:relative}
+.menu{
+  position:absolute;right:0;top:36px;z-index:40;min-width:190px;padding:4px;
+  background:var(--background);border:1px solid var(--border);border-radius:10px;
+  box-shadow:0 8px 24px rgb(0 0 0 / .1);
+}
+.menu label{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;font-size:13px;cursor:pointer}
+.menu label:hover{background:var(--accent)}
+.spacer{flex:1}
+
+/* ── Table ──────────────────────────────────────────── */
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+thead th{
+  height:40px;padding:0 8px;text-align:left;font-size:14px;font-weight:500;color:var(--foreground);
+  border-bottom:1px solid var(--border);white-space:nowrap;background:var(--card);
+}
+th:first-child,td:first-child{padding-left:24px}
+th:last-child,td:last-child{padding-right:24px}
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{color:var(--muted-foreground)}
+th .ind{opacity:0;margin-left:4px;font-size:10px}
+th[data-dir] .ind{opacity:1}
+th.r,td.r{text-align:right}
+tbody td{padding:8px;height:53px;border-bottom:1px solid var(--border);font-size:14px;vertical-align:middle}
+tbody tr:last-child td{border-bottom:none}
+tbody tr.clickable{cursor:pointer}
+tbody tr.clickable:hover{background:var(--muted)}
+.cell-strong{font-weight:500}
+.cell-muted{color:var(--muted-foreground)}
+.cell-nowrap{white-space:nowrap}
+.trunc{display:block;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.table-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 24px;border-top:1px solid var(--border)}
+.foot-info{font-size:13px;color:var(--muted-foreground);font-variant-numeric:tabular-nums}
+.pager{display:flex;align-items:center;gap:6px}
+.pager button{width:32px;height:32px;border:1px solid var(--input);border-radius:8px;display:grid;place-items:center;color:var(--muted-foreground)}
+.pager button:hover:not(:disabled){background:var(--accent);color:var(--foreground)}
+.pager button:disabled{opacity:.4;cursor:default}
+.pager svg{width:14px;height:14px}
+.empty{padding:48px 24px;text-align:center;color:var(--muted-foreground);font-size:14px}
+
+/* ── Sheet / drawer ─────────────────────────────────── */
+.overlay{position:fixed;inset:0;background:rgb(0 0 0 / .4);z-index:50;opacity:0;transition:opacity .18s}
+.overlay.on{opacity:1}
+.sheet{
+  position:fixed;top:0;right:0;bottom:0;width:420px;max-width:92vw;z-index:51;
+  background:var(--background);border-left:1px solid var(--border);
+  display:flex;flex-direction:column;transform:translateX(100%);transition:transform .2s ease;
+}
+.sheet.on{transform:translateX(0)}
+.sheet-head{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.sheet-head h3{margin:0;font-size:15px;font-weight:600}
+.sheet-head p{margin:2px 0 0;font-size:13px;color:var(--muted-foreground)}
+.sheet-body{flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:16px}
+.sheet-section{display:flex;flex-direction:column;gap:9px}
+.sheet-section>h4{margin:0;font-size:11px;font-weight:500;letter-spacing:.04em;text-transform:uppercase;color:var(--muted-foreground)}
+.kv{display:flex;align-items:baseline;justify-content:space-between;gap:16px;font-size:13px}
+.kv span{color:var(--muted-foreground);flex:none}
+.kv b{font-weight:400;text-align:right;overflow-wrap:anywhere}
+.kv b.none{color:var(--muted-foreground)}
+.chip-row{display:flex;flex-wrap:wrap;gap:4px}
+.chip{border:1px solid var(--border);border-radius:6px;padding:2px 7px;font-size:12px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--muted-foreground)}
+
+/* ── Responsive ─────────────────────────────────────── */
+@media (max-width:820px){
+  .sidebar{position:fixed;z-index:55;transform:translateX(-100%);transition:transform .2s}
+  .layout[data-mobile="open"] .sidebar{transform:translateX(0)}
+  .layout[data-collapsed="true"] .sidebar{width:256px}
+  .layout[data-collapsed="true"] .sb-label,
+  .layout[data-collapsed="true"] .sb-group-label,
+  .layout[data-collapsed="true"] .sb-count,
+  .layout[data-collapsed="true"] .sb-user-meta{display:block}
+  .layout[data-collapsed="true"] .sb-item{justify-content:flex-start;padding:6px 8px}
+  .layout[data-collapsed="true"] .sb-brand span{display:inline}
+}
+</style>
+</head>
+<body>
+<div class="layout" id="layout" data-collapsed="false">
+
+  <aside class="sidebar">
+    <div class="sb-brand"><i>L</i><span>Lily</span></div>
+    <div class="sb-scroll">
+      <div class="sb-group">
+        <div class="sb-group-label">Operations</div>
+        <nav id="nav-main"></nav>
+      </div>
+      <div class="sb-group">
+        <div class="sb-group-label">Billing</div>
+        <nav id="nav-billing"></nav>
+      </div>
+    </div>
+    <div class="sb-foot">
+      <form method="post" action="/admin/logout" id="logout-form">
+        <button class="sb-user" type="submit" id="sb-user" title="Sign out">
+          <i>AD</i>
+          <span class="sb-user-meta"><b>Admin</b><span id="sb-user-sub"></span></span>
+        </button>
+      </form>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn" id="toggle" type="button" aria-label="Toggle sidebar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>
+      </button>
+      <div class="sep"></div>
+      <div class="crumb"><em>Lily</em> / <span id="crumb">Overview</span></div>
+      <div class="top-spacer"></div>
+      <div class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.2-3.2"/></svg>
+        <input id="global-search" type="search" placeholder="Search users…" aria-label="Search users">
+      </div>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
+    </header>
+
+    <div class="content">
+      <div class="head-row">
+        <div class="page-head">
+          <h1 id="page-title">Lily Overview</h1>
+          <p id="page-desc">Application activity and analytics</p>
+        </div>
+        <div id="head-controls"></div>
+      </div>
+      <div id="views"></div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="overlay" hidden></div>
+<aside class="sheet" id="sheet" aria-hidden="true">
+  <div class="sheet-head">
+    <div><h3 id="sheet-title"></h3><p id="sheet-sub"></p></div>
+    <button class="icon-btn" id="sheet-close" type="button" aria-label="Close">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <div class="sheet-body" id="sheet-body"></div>
+</aside>
+<div class="tip" id="tip" hidden></div>
+
+<script>
+const DATA = /*__DATA__*/null;
+const { users: USERS, sessions: SESSIONS, payments: PAYMENTS, daily: DAILY, built: BUILT } = DATA;
+
+/* ── Helpers ────────────────────────────────────────── */
+const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
+const svgIcon = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const DAY = 86400000;
+const fmtDate = iso => new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+const fmtShort = iso => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+const ago = iso => {
+  if (!iso) return "—";
+  const d = Math.floor((Date.now() - new Date(iso)) / DAY);
+  if (d <= 0) return "today"; if (d === 1) return "1d ago";
+  if (d < 31) return d + "d ago";
+  const m = Math.floor(d / 30.44);
+  return m < 12 ? m + "mo ago" : Math.floor(m / 12) + "y ago";
+};
+const money = (amt, cur) => amt == null ? "—" :
+  new Intl.NumberFormat("en-GB", { style: "currency", currency: cur || "USD", maximumFractionDigits: 2 }).format(amt);
+const pct = (now, prev) => {
+  // With nothing in the previous window there is no percentage to state.
+  if (!prev) return null;
+  return ((now - prev) / prev) * 100;
+};
+
+const ICONS = {
+  overview: '<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/>',
+  conversations: '<path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/>',
+  safety: '<path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V6l8-3 8 3z"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
+  payments: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>',
+};
+const TREND_UP = '<path d="M7 17L17 7"/><path d="M8 7h9v9"/>';
+const TREND_DOWN = '<path d="M7 7l10 10"/><path d="M17 8v9H8"/>';
+
+/* ── Derived data ───────────────────────────────────── */
+const PIVOT = "2026-08-17";
+const flagged = USERS.filter(u => u.safety === "critical");
+const anySafety = USERS.filter(u => u.safety === "critical" || u.safety === "warning");
+const revenue = PAYMENTS.reduce((s, p) => s + (p.amount || 0), 0);
+const GRANTING = ["active", "trialing", "cancelled"];
+
+const VIEWS = {
+  overview:      { label: "Overview",      icon: "overview",      group: "main",    title: "Lily Overview",  desc: "Application activity and analytics" },
+  users:         { label: "Users",         icon: "users",         group: "main",    count: USERS.length,     title: "Users",          desc: "Everyone who has completed onboarding" },
+  conversations: { label: "Conversations", icon: "conversations", group: "main",    count: SESSIONS.length,  title: "Conversations",  desc: "Chat sessions and message volume" },
+  safety:        { label: "Safety",        icon: "safety",        group: "main",    count: anySafety.length, title: "Safety",         desc: "Users whose safety check was not “No”" },
+  payments:      { label: "Payments",      icon: "payments",      group: "billing", count: PAYMENTS.length,  title: "Payments",       desc: "Dodo subscriptions and revenue" },
+};
+
+/* ── Range state ────────────────────────────────────── */
+let range = 90;
+const inRange = (iso, days, offset = 0) => {
+  if (!iso) return false;
+  const t = new Date(iso).getTime();
+  const end = Date.now() - offset * days * DAY;
+  return t > end - days * DAY && t <= end;
+};
+
+/* ── Chrome ─────────────────────────────────────────── */
+/* The same template is served live at /admin and written to disk as an offline
+   snapshot. Only the served copy has a logout route to post to. */
+const SERVED = location.protocol !== "file:" && location.pathname.startsWith("/admin");
+document.getElementById("sb-user-sub").textContent = SERVED ? "Signed in" : "Snapshot " + fmtDate(BUILT);
+if (!SERVED) {
+  const f = document.getElementById("logout-form");
+  f.removeAttribute("action");
+  f.onsubmit = e => e.preventDefault();
+  document.getElementById("sb-user").title = "Offline snapshot — " + fmtDate(BUILT);
+}
+
+const layout = document.getElementById("layout");
+const isMobile = () => window.matchMedia("(max-width:820px)").matches;
+document.getElementById("toggle").onclick = () => {
+  if (isMobile()) layout.dataset.mobile = layout.dataset.mobile === "open" ? "closed" : "open";
+  else layout.dataset.collapsed = layout.dataset.collapsed === "true" ? "false" : "true";
+};
+
+const themeBtn = document.getElementById("theme");
+const MOON = '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>';
+const SUN = '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>';
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  themeBtn.innerHTML = svgIcon(t === "dark" ? SUN : MOON);
+  try { localStorage.setItem("lily-admin-theme", t); } catch {}
+}
+themeBtn.onclick = () => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+let saved = null;
+try { saved = localStorage.getItem("lily-admin-theme"); } catch {}
+applyTheme(saved || (window.matchMedia("(prefers-color-scheme:dark)").matches ? "dark" : "light"));
+
+/* ── Nav ────────────────────────────────────────────── */
+for (const [key, v] of Object.entries(VIEWS)) {
+  const b = el("button", "sb-item");
+  b.type = "button";
+  b.dataset.v = key;
+  b.innerHTML = svgIcon(ICONS[v.icon]);
+  b.append(el("span", "sb-label", v.label));
+  if (v.count != null) b.append(el("span", "sb-count", v.count));
+  b.onclick = () => { show(key); if (isMobile()) layout.dataset.mobile = "closed"; };
+  document.getElementById(v.group === "billing" ? "nav-billing" : "nav-main").append(b);
+}
+
+const viewsRoot = document.getElementById("views");
+const headControls = document.getElementById("head-controls");
+let current = "overview";
+
+function show(key) {
+  current = key;
+  document.querySelectorAll(".sb-item").forEach(b =>
+    b.dataset.v === key ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current"));
+  document.getElementById("crumb").textContent = VIEWS[key].label;
+  document.getElementById("page-title").textContent = VIEWS[key].title;
+  document.getElementById("page-desc").textContent = VIEWS[key].desc;
+  headControls.replaceChildren();
+  viewsRoot.replaceChildren();
+  RENDER[key]();
+}
+
+/* ── Building blocks ────────────────────────────────── */
+function card(cls) { return el("section", "card" + (cls ? " " + cls : "")); }
+function cardHeader(title, desc, right, bordered) {
+  const h = el("div", "card-header" + (bordered ? " b" : ""));
+  const l = el("div");
+  l.append(el("h2", "card-title", title));
+  if (desc) l.append(el("p", "card-desc", desc));
+  h.append(l);
+  if (right) h.append(right);
+  return h;
+}
+function badge(text, kind, icon) {
+  const b = el("span", "badge" + (kind ? " badge-" + kind : ""));
+  if (icon) b.innerHTML = svgIcon(icon);
+  b.append(document.createTextNode(text));
+  return b;
+}
+const STATUS_KIND = { active: "success", trialing: "info", cancelled: "muted", expired: "muted", past_due: "warning", ended: "muted", closing: "warning" };
+const DOT = '<circle cx="12" cy="12" r="5" fill="currentColor" stroke="none"/>';
+
+function kpi(label, value, change, footText, subText) {
+  const c = card();
+  const k = el("div", "kpi");
+  const top = el("div", "kpi-top");
+  top.append(el("span", "kpi-label", label));
+  if (change != null) {
+    const up = change >= 0;
+    top.append(badge((up ? "+" : "") + change.toFixed(1) + "%", null, up ? TREND_UP : TREND_DOWN));
+  }
+  k.append(top, el("div", "kpi-value num", value));
+  if (footText) {
+    const f = el("div", "kpi-foot");
+    f.append(document.createTextNode(footText));
+    if (change != null) f.innerHTML += svgIcon(change >= 0 ? TREND_UP : TREND_DOWN);
+    k.append(f);
+  }
+  if (subText) k.append(el("div", "kpi-sub", subText));
+  c.append(k);
+  return c;
+}
+
+function rangeToggle(onChange) {
+  const g = el("div", "toggle-group");
+  for (const d of [7, 30, 90]) {
+    const b = el("button", null, "Last " + d + " days");
+    b.type = "button";
+    b.setAttribute("aria-pressed", d === range);
+    b.onclick = () => { range = d; onChange(); };
+    g.append(b);
+  }
+  return g;
+}
+
+/* Generic sortable, filterable, paginated table. */
+function dataTable(opts) {
+  const { columns, rows, pageSize = 10, onRowClick, searchKeys, filters = [], toolbar = true } = opts;
+  const wrap = card();
+  let sortKey = opts.sortKey, sortDir = opts.sortDir || "desc", page = 1, query = "";
+  const filterState = {};
+  filters.forEach(f => filterState[f.key] = "all");
+  const hidden = new Set();
+
+  if (opts.header) wrap.append(opts.header);
+
+  if (toolbar) {
+    const tb = el("div", "toolbar");
+    if (searchKeys) {
+      const input = el("input", "input");
+      input.type = "search";
+      input.placeholder = opts.searchPlaceholder || "Search…";
+      input.setAttribute("aria-label", input.placeholder);
+      input.oninput = e => { query = e.target.value.toLowerCase().trim(); page = 1; draw(); };
+      input.style.width = "220px";
+      tb.append(input);
+    }
+    for (const f of filters) {
+      const sel = el("select", "select");
+      sel.setAttribute("aria-label", f.label);
+      sel.append(new Option(f.label + ": All", "all"));
+      f.options.forEach(o => sel.append(new Option(f.label + ": " + o.label, o.value)));
+      sel.onchange = e => { filterState[f.key] = e.target.value; page = 1; draw(); };
+      tb.append(sel);
+    }
+    tb.append(el("div", "spacer"));
+    // Column visibility, as in the reference's "Columns" dropdown.
+    const mw = el("div", "menu-wrap");
+    const btn = el("button", "btn");
+    btn.type = "button";
+    btn.innerHTML = svgIcon('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>');
+    btn.append(document.createTextNode("Columns"));
+    const menu = el("div", "menu");
+    menu.hidden = true;
+    columns.forEach((c, i) => {
+      if (c.fixed) return;
+      const lab = el("label");
+      const cb = el("input");
+      cb.type = "checkbox"; cb.checked = true;
+      cb.onchange = () => { cb.checked ? hidden.delete(i) : hidden.add(i); draw(); };
+      lab.append(cb, document.createTextNode(c.label));
+      menu.append(lab);
+    });
+    btn.onclick = e => { e.stopPropagation(); menu.hidden = !menu.hidden; };
+    document.addEventListener("click", () => { menu.hidden = true; });
+    mw.append(btn, menu);
+    tb.append(mw);
+    wrap.append(tb);
+  }
+
+  const tblWrap = el("div", "table-wrap");
+  const table = el("table");
+  const thead = el("thead");
+  const headRow = el("tr");
+  thead.append(headRow);
+  const tbody = el("tbody");
+  table.append(thead, tbody);
+  tblWrap.append(table);
+  const empty = el("div", "empty", opts.emptyText || "No results.");
+  empty.hidden = true;
+  const foot = el("div", "table-foot");
+  wrap.append(tblWrap, empty, foot);
+
+  function draw() {
+    headRow.replaceChildren();
+    columns.forEach((c, i) => {
+      if (hidden.has(i)) return;
+      const th = el("th", (c.align === "right" ? "r " : "") + (c.sort ? "sortable" : ""));
+      th.append(document.createTextNode(c.label));
+      if (c.sort) {
+        th.append(el("span", "ind", sortDir === "desc" ? "↓" : "↑"));
+        if (sortKey === c.sort) th.setAttribute("data-dir", sortDir);
+        th.onclick = () => {
+          sortDir = sortKey === c.sort && sortDir === "desc" ? "asc" : "desc";
+          sortKey = c.sort; page = 1; draw();
+        };
+      }
+      if (c.width) th.style.width = c.width;
+      headRow.append(th);
+    });
+
+    let list = rows.slice();
+    if (query && searchKeys) {
+      list = list.filter(r => searchKeys.some(k => String(r[k] ?? "").toLowerCase().includes(query)));
+    }
+    for (const f of filters) {
+      const v = filterState[f.key];
+      if (v !== "all") list = list.filter(r => f.test(r, v));
+    }
+    if (sortKey) {
+      const col = columns.find(c => c.sort === sortKey);
+      list.sort((a, b) => {
+        const x = col.value(a), y = col.value(b);
+        if (x == null && y == null) return 0;
+        if (x == null) return 1;
+        if (y == null) return -1;
+        if (x < y) return sortDir === "desc" ? 1 : -1;
+        if (x > y) return sortDir === "desc" ? -1 : 1;
+        return 0;
+      });
+    }
+
+    const pages = Math.max(1, Math.ceil(list.length / pageSize));
+    page = Math.min(page, pages);
+    const slice = list.slice((page - 1) * pageSize, page * pageSize);
+
+    tbody.replaceChildren();
+    for (const r of slice) {
+      const tr = el("tr", onRowClick ? "clickable" : null);
+      columns.forEach((c, i) => {
+        if (hidden.has(i)) return;
+        const td = el("td", c.align === "right" ? "r" : null);
+        const out = c.cell(r);
+        if (out instanceof Node) td.append(out); else td.textContent = out;
+        tr.append(td);
+      });
+      if (onRowClick) {
+        tr.tabIndex = 0;
+        tr.onclick = () => onRowClick(r);
+        tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onRowClick(r); } };
+      }
+      tbody.append(tr);
+    }
+    empty.hidden = list.length > 0;
+    table.hidden = list.length === 0;
+
+    foot.replaceChildren();
+    foot.append(el("span", "foot-info",
+      list.length ? `${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, list.length)} of ${list.length}` : "0 results"));
+    const pager = el("div", "pager");
+    const info = el("span", "foot-info", `Page ${page} of ${pages}`);
+    const prev = el("button"); prev.type = "button"; prev.setAttribute("aria-label", "Previous page");
+    prev.innerHTML = svgIcon('<path d="M15 18l-6-6 6-6"/>');
+    const next = el("button"); next.type = "button"; next.setAttribute("aria-label", "Next page");
+    next.innerHTML = svgIcon('<path d="M9 18l6-6-6-6"/>');
+    prev.disabled = page === 1; next.disabled = page === pages;
+    prev.onclick = () => { page--; draw(); };
+    next.onclick = () => { page++; draw(); };
+    pager.append(info, prev, next);
+    foot.append(pager);
+  }
+
+  draw();
+  return wrap;
+}
+
+/* ── Chart ──────────────────────────────────────────── */
+function activityChart() {
+  const c = card();
+  const right = rangeToggle(() => show(current));
+  c.append(cardHeader("Activity", "Sessions and messages per day", right));
+
+  const legend = el("div", "legend");
+  legend.innerHTML =
+    `<span><i style="background:var(--chart-2)"></i>Sessions</span>` +
+    `<span><i style="background:var(--chart-1)"></i>Messages</span>`;
+
+  const body = el("div", "chart-body");
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Sessions and messages per day");
+  body.append(svg);
+  c.append(legend, body);
+
+  // Continuous day axis across the range — real counts, zero-filled gaps.
+  const byDay = new Map(DAILY.map(d => [d.date, d]));
+  const days = [];
+  for (let i = range - 1; i >= 0; i--) {
+    const d = new Date(Date.now() - i * DAY).toISOString().slice(0, 10);
+    const hit = byDay.get(d);
+    days.push({ date: d, sessions: hit ? hit.sessions : 0, messages: hit ? hit.messages : 0 });
+  }
+  const max = Math.max(1, ...days.map(d => Math.max(d.sessions, d.messages)));
+
+  const W = 900, H = 230, PL = 34, PR = 8, PT = 10, PB = 24;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  const mk = (t, a) => { const n = document.createElementNS(ns, t); for (const k in a) n.setAttribute(k, a[k]); return n; };
+  const plotW = W - PL - PR, plotH = H - PT - PB;
+  const X = i => PL + (days.length === 1 ? plotW / 2 : (i / (days.length - 1)) * plotW);
+  const Y = v => PT + plotH - (v / max) * plotH;
+
+  for (let i = 0; i <= 3; i++) {
+    const y = PT + (plotH * i) / 3;
+    svg.append(mk("line", { x1: PL, x2: W - PR, y1: y, y2: y, class: "grid-line" }));
+    const t = mk("text", { x: PL - 8, y: y + 3.5, "text-anchor": "end", class: "axis-text" });
+    t.textContent = Math.round(max * (1 - i / 3));
+    svg.append(t);
+  }
+
+  // Flat low-opacity fills, not gradients — restrained per the brief.
+  const series = [
+    { key: "messages", color: "var(--chart-1)", fill: .5 },
+    { key: "sessions", color: "var(--chart-2)", fill: .18 },
+  ];
+  for (const s of series) {
+    const pts = days.map((d, i) => `${X(i)},${Y(d[s.key])}`).join(" L");
+    svg.append(mk("path", {
+      d: `M${PL},${Y(0)} L${pts} L${X(days.length - 1)},${Y(0)} Z`,
+      fill: s.color, "fill-opacity": s.fill, stroke: "none",
+    }));
+    svg.append(mk("path", { d: `M${pts}`, fill: "none", stroke: s.color, "stroke-width": 1.5 }));
+  }
+
+  const step = Math.max(1, Math.ceil(days.length / 7));
+  days.forEach((d, i) => {
+    if (i % step && i !== days.length - 1) return;
+    const t = mk("text", { x: X(i), y: H - 6, "text-anchor": "middle", class: "axis-text" });
+    t.textContent = fmtShort(d.date);
+    svg.append(t);
+  });
+
+  const cursor = mk("line", { y1: PT, y2: PT + plotH, class: "grid-line", "stroke-width": 1, opacity: 0 });
+  svg.append(cursor);
+  const tip = document.getElementById("tip");
+  svg.addEventListener("mousemove", ev => {
+    const r = svg.getBoundingClientRect();
+    const i = Math.round(((ev.clientX - r.left) / r.width * W - PL) / plotW * (days.length - 1));
+    const d = days[Math.max(0, Math.min(days.length - 1, i))];
+    if (!d) return;
+    cursor.setAttribute("opacity", 1);
+    cursor.setAttribute("x1", X(days.indexOf(d)));
+    cursor.setAttribute("x2", X(days.indexOf(d)));
+    tip.hidden = false;
+    tip.innerHTML = `<b>${fmtDate(d.date)}</b>
+      <div>Sessions <span>${d.sessions}</span></div>
+      <div>Messages <span>${d.messages}</span></div>`;
+    tip.style.left = Math.min(ev.clientX + 14, window.innerWidth - 160) + "px";
+    tip.style.top = (ev.clientY - 10) + "px";
+  });
+  svg.addEventListener("mouseleave", () => { tip.hidden = true; cursor.setAttribute("opacity", 0); });
+
+  return c;
+}
+
+/* ── Sheet ──────────────────────────────────────────── */
+const sheet = document.getElementById("sheet");
+const overlay = document.getElementById("overlay");
+function closeSheet() {
+  sheet.classList.remove("on"); overlay.classList.remove("on");
+  sheet.setAttribute("aria-hidden", "true");
+  setTimeout(() => { overlay.hidden = true; }, 180);
+}
+document.getElementById("sheet-close").onclick = closeSheet;
+overlay.onclick = closeSheet;
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeSheet(); });
+
+function openUser(u) {
+  document.getElementById("sheet-title").textContent = u.name || "Unnamed";
+  document.getElementById("sheet-sub").textContent = u.email || "No email on file";
+  const body = document.getElementById("sheet-body");
+  body.replaceChildren();
+
+  const section = (title, pairs) => {
+    const s = el("div", "sheet-section");
+    s.append(el("h4", null, title));
+    for (const [k, v] of pairs) {
+      const row = el("div", "kv");
+      row.append(el("span", null, k));
+      if (v instanceof Node) row.append(v);
+      else {
+        const b = el("b", v ? null : "none", v || "Not answered");
+        row.append(b);
+      }
+      s.append(row);
+    }
+    body.append(s);
+  };
+
+  const chips = arr => {
+    if (!arr || !arr.length) return null;
+    const d = el("div", "chip-row");
+    arr.forEach(x => d.append(el("span", "chip", x)));
+    return d;
+  };
+
+  section("Account", [
+    ["Onboarded", fmtDate(u.joined)],
+    ["Last active", u.last_active ? fmtDate(u.last_active) + " · " + ago(u.last_active) : null],
+    ["Timezone", u.timezone],
+    ["Sessions", String(u.sessions)],
+    ["Messages", String(u.messages)],
+  ]);
+  section("Intake", [
+    ["Age", u.age],
+    ["Gender", u.gender],
+    ["Support style", u.support_style],
+    ["Duration", u.duration],
+    ["Coping style", u.coping],
+    ["Support network", u.network],
+    ["Safety check", safetyBadge(u.safety)],
+  ]);
+  const d = chips(u.difficulty), i = chips(u.impact);
+  if (d) { const s = el("div", "sheet-section"); s.append(el("h4", null, "Current difficulty"), d); body.append(s); }
+  if (i) { const s = el("div", "sheet-section"); s.append(el("h4", null, "Daily impact"), i); body.append(s); }
+  const idSec = el("div", "sheet-section");
+  idSec.append(el("h4", null, "Identifier"), el("div", "mono", u.id));
+  body.append(idSec);
+
+  overlay.hidden = false;
+  requestAnimationFrame(() => { sheet.classList.add("on"); overlay.classList.add("on"); });
+  sheet.setAttribute("aria-hidden", "false");
+}
+
+/* A session can belong to an id with no user_info row — show it as an identifier,
+   not as a name that failed to load. */
+function userCell(v) {
+  if (v && /^user_[A-Za-z0-9]+$/.test(v)) {
+    const s = el("span", "mono trunc");
+    s.textContent = v.slice(0, 12) + "…";
+    s.title = v;
+    return s;
+  }
+  return el("span", "cell-strong trunc", v || "—");
+}
+
+function safetyBadge(s) {
+  if (s === "critical") return badge("Yes, recently", "danger", DOT);
+  if (s === "warning") return badge("A few times", "warning", DOT);
+  if (s === "none") return badge("No", "muted");
+  return el("span", "cell-muted", "—");
+}
+
+/* ── Views ──────────────────────────────────────────── */
+const RENDER = {
+  overview() {
+    const nowUsers = USERS.filter(u => inRange(u.joined, range)).length;
+    const prevUsers = USERS.filter(u => inRange(u.joined, range, 1)).length;
+    const nowSess = SESSIONS.filter(s => inRange(s.created, range)).length;
+    const prevSess = SESSIONS.filter(s => inRange(s.created, range, 1)).length;
+    const nowMsgs = DAILY.filter(d => inRange(d.date, range)).reduce((a, d) => a + d.messages, 0);
+    const prevMsgs = DAILY.filter(d => inRange(d.date, range, 1)).reduce((a, d) => a + d.messages, 0);
+    const active = new Set(SESSIONS.filter(s => inRange(s.last_message || s.created, range)).map(s => s.user_id)).size;
+    const prevActive = new Set(SESSIONS.filter(s => inRange(s.last_message || s.created, range, 1)).map(s => s.user_id)).size;
+
+    const grid = el("div", "kpis");
+    grid.append(
+      kpi("New users", String(nowUsers), pct(nowUsers, prevUsers), "Completed onboarding", `Against the previous ${range} days`),
+      kpi("Active users", String(active), pct(active, prevActive), "Started or continued a session", `Against the previous ${range} days`),
+      kpi("Sessions", String(nowSess), pct(nowSess, prevSess), "Conversations opened", `Against the previous ${range} days`),
+      kpi("Messages", String(nowMsgs), pct(nowMsgs, prevMsgs), "Turns exchanged", `Against the previous ${range} days`),
+    );
+    viewsRoot.append(grid, activityChart());
+
+    viewsRoot.append(dataTable({
+      header: cardHeader("Recent sessions", "Most recently opened conversations", null, true),
+      toolbar: false,
+      pageSize: 8,
+      sortKey: "created", sortDir: "desc",
+      rows: SESSIONS,
+      emptyText: "No sessions recorded yet.",
+      columns: [
+        { label: "User", sort: "user", fixed: true, value: r => (r.user || "").toLowerCase(),
+          cell: r => userCell(r.user) },
+        { label: "Status", sort: "status", value: r => r.status,
+          cell: r => badge(r.status || "—", STATUS_KIND[r.status] || "muted", DOT) },
+        { label: "Messages", sort: "messages", align: "right", value: r => r.messages,
+          cell: r => String(r.messages) },
+        { label: "Started", sort: "created", value: r => r.created,
+          cell: r => { const s = el("span", "cell-muted cell-nowrap", fmtDate(r.created)); return s; } },
+        { label: "Last message", sort: "last_message", value: r => r.last_message,
+          cell: r => el("span", "cell-muted cell-nowrap", r.last_message ? ago(r.last_message) : "—") },
+      ],
+    }));
+  },
+
+  users() {
+    viewsRoot.append(dataTable({
+      header: cardHeader("All users", USERS.length + " onboarded", null, true),
+      rows: USERS,
+      pageSize: 10,
+      sortKey: "joined", sortDir: "desc",
+      searchKeys: ["name", "email"],
+      searchPlaceholder: "Search name or email…",
+      onRowClick: openUser,
+      emptyText: "No users match those filters.",
+      filters: [
+        { key: "safety", label: "Safety", options: [
+            { label: "Yes, recently", value: "critical" },
+            { label: "A few times", value: "warning" },
+            { label: "No", value: "none" }],
+          test: (r, v) => r.safety === v },
+        { key: "activity", label: "Activity", options: [
+            { label: "Active", value: "active" },
+            { label: "No messages", value: "idle" }],
+          test: (r, v) => v === "active" ? r.messages > 0 : r.messages === 0 },
+      ],
+      columns: [
+        { label: "User", sort: "name", fixed: true, value: r => (r.name || "").toLowerCase(),
+          cell: r => {
+            const d = el("div");
+            d.append(el("div", "cell-strong trunc", r.name || "Unnamed"));
+            d.append(el("div", "cell-muted trunc", r.email || "no email"));
+            return d;
+          } },
+        { label: "Age", sort: "age", value: r => r.age, cell: r => el("span", "cell-muted", r.age || "—") },
+        { label: "Safety", sort: "safety", value: r => ({ critical: 3, warning: 2, none: 1 }[r.safety] || 0),
+          cell: r => safetyBadge(r.safety) },
+        { label: "Sessions", sort: "sessions", align: "right", value: r => r.sessions, cell: r => String(r.sessions) },
+        { label: "Messages", sort: "messages", align: "right", value: r => r.messages,
+          cell: r => r.messages ? String(r.messages) : el("span", "cell-muted", "—") },
+        { label: "Last active", sort: "last_active", value: r => r.last_active,
+          cell: r => el("span", "cell-muted cell-nowrap", ago(r.last_active)) },
+        { label: "Onboarded", sort: "joined", value: r => r.joined,
+          cell: r => el("span", "cell-muted cell-nowrap", fmtDate(r.joined)) },
+      ],
+    }));
+  },
+
+  conversations() {
+    const withMsgs = SESSIONS.filter(s => s.messages > 0).length;
+    const grid = el("div", "kpis");
+    grid.append(
+      kpi("Sessions", String(SESSIONS.length), null, "All time", "Rows in therapy_sessions"),
+      kpi("With messages", String(withMsgs), null, "Reached a real conversation", `${SESSIONS.length - withMsgs} opened and left empty`),
+      kpi("Messages", String(DAILY.reduce((a, d) => a + d.messages, 0)), null, "Turns exchanged", "User and Lily combined"),
+      kpi("Active now", String(SESSIONS.filter(s => s.status === "active").length), null, "Open sessions", "Status is active"),
+    );
+    viewsRoot.append(grid);
+
+    viewsRoot.append(dataTable({
+      header: cardHeader("Sessions", "Every conversation, newest first", null, true),
+      rows: SESSIONS,
+      pageSize: 10,
+      sortKey: "created", sortDir: "desc",
+      searchKeys: ["user"],
+      searchPlaceholder: "Search user…",
+      emptyText: "No sessions match those filters.",
+      filters: [
+        { key: "status", label: "Status", options: [
+            { label: "Active", value: "active" },
+            { label: "Closing", value: "closing" },
+            { label: "Ended", value: "ended" }],
+          test: (r, v) => r.status === v },
+      ],
+      columns: [
+        { label: "User", sort: "user", fixed: true, value: r => (r.user || "").toLowerCase(),
+          cell: r => userCell(r.user) },
+        { label: "Status", sort: "status", value: r => r.status,
+          cell: r => badge(r.status || "—", STATUS_KIND[r.status] || "muted", DOT) },
+        { label: "Messages", sort: "messages", align: "right", value: r => r.messages, cell: r => String(r.messages) },
+        { label: "Started", sort: "created", value: r => r.created,
+          cell: r => el("span", "cell-muted cell-nowrap", fmtDate(r.created)) },
+        { label: "Last message", sort: "last_message", value: r => r.last_message,
+          cell: r => el("span", "cell-muted cell-nowrap", r.last_message ? ago(r.last_message) : "—") },
+        { label: "Session", fixed: true, value: r => r.id, cell: r => el("span", "mono", String(r.id).slice(0, 8)) },
+      ],
+    }));
+  },
+
+  safety() {
+    const grid = el("div", "kpis");
+    const minors = USERS.filter(u => u.age === "Under 18");
+    grid.append(
+      kpi("Yes, recently", String(flagged.length), null, "Needs review", "Most severe answer"),
+      kpi("A few times before", String(USERS.filter(u => u.safety === "warning").length), null, "Historic disclosure", "Worth knowing"),
+      kpi("Under 18", String(minors.length), null, "Selected the under-18 bracket", "Across all answers"),
+      kpi("Unanswered", String(USERS.filter(u => u.safety === "unknown").length), null, "No safety answer stored", "Older or partial intakes"),
+    );
+    viewsRoot.append(grid);
+
+    viewsRoot.append(dataTable({
+      header: cardHeader("Safety check responses", "Anyone who did not answer “No”, most severe first", null, true),
+      rows: anySafety,
+      pageSize: 10,
+      sortKey: "safety", sortDir: "desc",
+      searchKeys: ["name", "email"],
+      searchPlaceholder: "Search name or email…",
+      onRowClick: openUser,
+      emptyText: "Nobody has flagged a safety concern.",
+      columns: [
+        { label: "User", sort: "name", fixed: true, value: r => (r.name || "").toLowerCase(),
+          cell: r => {
+            const d = el("div");
+            d.append(el("div", "cell-strong trunc", r.name || "Unnamed"));
+            d.append(el("div", "cell-muted trunc", r.email || "no email"));
+            return d;
+          } },
+        { label: "Safety", sort: "safety", value: r => ({ critical: 3, warning: 2 }[r.safety] || 0),
+          cell: r => safetyBadge(r.safety) },
+        { label: "Age", sort: "age", value: r => r.age, cell: r => el("span", "cell-muted", r.age || "—") },
+        { label: "Support network", sort: "network", value: r => r.network,
+          cell: r => el("span", "cell-muted trunc", r.network || "—") },
+        { label: "Coping", sort: "coping", value: r => r.coping,
+          cell: r => el("span", "cell-muted trunc", r.coping || "—") },
+        { label: "Onboarded", sort: "joined", value: r => r.joined,
+          cell: r => el("span", "cell-muted cell-nowrap", fmtDate(r.joined)) },
+      ],
+    }));
+  },
+
+  payments() {
+    const granting = PAYMENTS.filter(p => GRANTING.includes(p.status));
+    const cur = PAYMENTS.find(p => p.currency)?.currency || "USD";
+    const grid = el("div", "kpis");
+    grid.append(
+      kpi("Revenue", money(revenue, cur), null, "Sum of recorded amounts", "Across all subscriptions"),
+      kpi("Subscriptions", String(PAYMENTS.length), null, "Rows in dodo_subscriptions", "All statuses"),
+      kpi("Granting access", String(granting.length), null, "Active, trialing or cancelled", "Mirrors GRANTING_STATUSES"),
+      kpi("Average", money(PAYMENTS.length ? revenue / PAYMENTS.length : 0, cur), null, "Per subscription", "Recorded amounts only"),
+    );
+    viewsRoot.append(grid);
+
+    viewsRoot.append(dataTable({
+      header: cardHeader("Subscriptions", "Dodo transactions, newest first", null, true),
+      rows: PAYMENTS,
+      pageSize: 10,
+      sortKey: "created", sortDir: "desc",
+      searchKeys: ["user", "ref"],
+      searchPlaceholder: "Search user or reference…",
+      emptyText: "No subscriptions recorded.",
+      filters: [
+        { key: "status", label: "Status", options: [
+            { label: "Active", value: "active" },
+            { label: "Trialing", value: "trialing" },
+            { label: "Cancelled", value: "cancelled" },
+            { label: "Past due", value: "past_due" },
+            { label: "Expired", value: "expired" }],
+          test: (r, v) => r.status === v },
+      ],
+      columns: [
+        { label: "User", sort: "user", fixed: true, value: r => (r.user || "").toLowerCase(),
+          cell: r => userCell(r.user) },
+        { label: "Reference", value: r => r.ref, cell: r => el("span", "mono", r.ref ? String(r.ref).slice(0, 14) : "—") },
+        { label: "Plan", sort: "plan", value: r => r.plan, cell: r => badge(r.plan || "—", "muted") },
+        { label: "Amount", sort: "amount", align: "right", value: r => r.amount,
+          cell: r => money(r.amount, r.currency || cur) },
+        { label: "Status", sort: "status", value: r => r.status,
+          cell: r => badge(r.status || "—", STATUS_KIND[r.status] || "muted", DOT) },
+        { label: "Region", value: r => r.region, cell: r => el("span", "cell-muted", r.region || "—") },
+        { label: "Created", sort: "created", value: r => r.created,
+          cell: r => el("span", "cell-muted cell-nowrap", fmtDate(r.created)) },
+      ],
+    }));
+  },
+};
+
+/* Global search jumps to Users with the query applied. */
+document.getElementById("global-search").addEventListener("keydown", e => {
+  if (e.key !== "Enter") return;
+  const q = e.target.value.trim();
+  show("users");
+  const input = viewsRoot.querySelector('input[type="search"]');
+  if (input) { input.value = q; input.dispatchEvent(new Event("input")); }
+});
+
+show("overview");
+</script>
+</body>
+</html>
