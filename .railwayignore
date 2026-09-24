@@ -1,0 +1,10 @@
+# Keep the build context to what the Dockerfile actually COPYs.
+# .env and the generated dashboard hold secrets and user data respectively —
+# neither should ever enter a build context.
+.env
+.env.*
+venv/
+__pycache__/
+*.pyc
+scripts/lily-dashboard.html
+migrations/

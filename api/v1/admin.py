@@ -92,6 +92,14 @@ def _login_html(error: str | None = None, status: int = 200) -> HTMLResponse:
     )
 
 
+def _is_https(request: Request) -> bool:
+    """Railway terminates TLS at the edge, so request.url.scheme is http even
+    when the browser is on https. Without consulting the forwarded header the
+    session cookie ships without Secure and can be sent in clear text."""
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    return proto.split(",")[0].strip().lower() == "https"
+
+
 def _client_ip(request: Request) -> str:
     # Railway terminates TLS in front of the app, so the real address arrives in
     # the forwarding header. Falls back to the socket for local runs.
@@ -141,7 +149,7 @@ async def login(
         max_age=SESSION_HOURS * 3600,
         httponly=True,
         samesite="lax",
-        secure=request.url.scheme == "https",
+        secure=_is_https(request),
         path="/admin",
     )
     return response
