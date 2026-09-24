@@ -144,6 +144,9 @@ svg{flex:none}
 .card-desc{font-size:14px;color:var(--muted-foreground);margin:2px 0 0}
 
 /* ── KPI ────────────────────────────────────────────── */
+/* Every view stacks a KPI row, charts and tables — one gap owns the rhythm
+   rather than per-section margins that drift apart. */
+#views{display:flex;flex-direction:column;gap:16px}
 .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
 @media (max-width:1100px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:560px){.kpis{grid-template-columns:1fr}}
